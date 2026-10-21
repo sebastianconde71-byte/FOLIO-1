@@ -1,0 +1,5 @@
+Componentes incluidos para que Folio funcione sin internet:
+- PDF.js 3.11.174 (Mozilla) - licencia Apache 2.0
+- JSZip 3.10 - licencia MIT
+- Inter (Rasmus Andersson) y Source Serif 4 (Adobe) - licencia SIL Open Font License 1.1
+Se distribuyen sin modificar.

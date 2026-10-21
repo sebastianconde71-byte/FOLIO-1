@@ -1,0 +1,12 @@
+FOLIO - paquete para publicar en internet (gratis)
+
+Sube TODO el contenido de esta carpeta (index.html, sw.js, manifest.webmanifest,
+los iconos y la carpeta libs) a GitHub Pages, Netlify o Cloudflare Pages.
+No cambies los nombres de los archivos.
+
+Despues, abre la direccion que te den desde cualquier dispositivo:
+ - Android / PC: menu del navegador -> "Instalar app".
+ - iPhone / iPad: Safari -> Compartir -> "Anadir a pantalla de inicio".
+
+La IA necesita que cada persona pegue su propia llave gratis de Gemini
+(Folio se la pide la primera vez que use la IA).
