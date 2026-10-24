@@ -6,6 +6,7 @@
 <title>Folio — Biblioteca</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#5B3DF5">
+<script src="config.js"></script>
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="libs/fonts/fonts.css">
@@ -956,7 +957,8 @@
   function getPdfBytes(key) {
     return pdfDbGet(key).then(function (buf) {
       if (buf) return buf;
-      return fetch("backup/pdf/" + key).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).catch(function () { return null; });
+      return fetch("backup/pdf/" + key).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).catch(function () { return null; })
+        .then(function (b) { return b || cloudGetPdf(state.docs.filter(function (d) { return d.pdfKey === key; })[0]); });
     }).catch(function () { return null; });
   }
   function downloadBlob(blob, filename) {
@@ -1200,6 +1202,526 @@
       return askProfile(had ? "Tu sesión ya no es válida (¿cambió tu PIN?). Entra de nuevo." : "");
     }).catch(function () {});
   }
+  /* ===== NUBE:INICIO ===== (sincronización con Supabase: biblioteca en todos tus dispositivos y carpetas compartidas) */
+  var CLOUD = { client: null, user: null, busy: false, status: "idle", error: "", lastSync: 0, progress: "", members: {}, myRoles: {},
+    usage: null, timer: null, liveT: null, channel: null, iv: null, meta: null, warned: {}, tick: 0, lastProg: 0, fp: {}, ownerEmail: {} };
+  var CLOUD_TABLES = ["folders", "docs", "tasks"];
+  var LOCAL_ONLY = { cloudOwner: 1, cloudRole: 1, cloudMembers: 1, cloudOwnerEmail: 1 };
+  var KEEP_LOCAL = { lastIndex: 1, totalSentences: 1, cloudRole: 1, cloudMembers: 1, cloudOwnerEmail: 1 };
+
+  function cloudConfigured() { var c = window.FOLIO_CLOUD; return !!(c && c.url && c.anonKey && /^https?:\/\//.test(c.url)); }
+  function readerOpen() { return typeof readerView !== "undefined" && readerView.classList.contains("active"); }
+  function findLocal(kind, id) { var l = state[kind]; for (var i = 0; i < l.length; i++) if (l[i].id === id) return l[i]; return null; }
+  function cloudWarnOnce(key, msg) { if (CLOUD.warned[key]) return; CLOUD.warned[key] = 1; try { toast(msg); } catch (e) {} }
+  function cloudErr(e) { var x = new Error((e && e.message) || "Error de la nube"); x.code = e && (e.code || e.status); x.status = e && e.status; return x; }
+  function unwrap(r) { if (r && r.error) throw cloudErr(r.error); return r ? r.data : null; }
+  function seqRun(items, fn) {
+    var i = 0;
+    return new Promise(function (res, rej) {
+      (function next() { if (i >= items.length) return res(); var it = items[i++]; Promise.resolve().then(function () { return fn(it, i, items.length); }).then(next, rej); })();
+    });
+  }
+
+  /* ---- cómo se guarda cada cosa en la nube ---- */
+  function stripLocal(o, skip) { var b = {}; Object.keys(o).forEach(function (k) { if (!LOCAL_ONLY[k] && skip.indexOf(k) === -1) b[k] = o[k]; }); return b; }
+  function toRow(kind, o) {
+    if (kind === "folders") return { id: o.id, parent_id: o.parentId || null, name: o.name || "Carpeta", color: o.color || null, created_ms: o.createdAt || null };
+    if (kind === "docs") return { id: o.id, folder_id: o.folderId || null, title: o.title || "Documento", content: o.text || "", body: stripLocal(o, ["id", "folderId", "title", "text", "lastIndex", "totalSentences"]) };
+    return { id: o.id, doc_id: o.docId, kind: o.kind, created_ms: o.createdAt || null, body: stripLocal(o, ["id", "docId", "kind", "createdAt"]) };
+  }
+  function fromRow(kind, r) {
+    var o;
+    if (kind === "folders") { o = { id: r.id, name: r.name, parentId: r.parent_id || null }; if (r.color) o.color = r.color; if (r.created_ms) o.createdAt = Number(r.created_ms); }
+    else if (kind === "docs") { o = Object.assign({}, r.body || {}); o.id = r.id; o.folderId = r.folder_id || null; o.title = r.title; o.text = r.content || ""; }
+    else { o = Object.assign({}, r.body || {}); o.id = r.id; o.docId = r.doc_id; o.kind = r.kind; if (r.created_ms) o.createdAt = Number(r.created_ms); }
+    o.cloudOwner = r.owner;
+    return o;
+  }
+  function rowHash(kind, o) { return textHash(JSON.stringify(toRow(kind, o))); }
+  function replaceInto(local, fresh) {
+    Object.keys(local).forEach(function (k) { if (!(k in fresh) && !KEEP_LOCAL[k]) delete local[k]; });
+    Object.keys(fresh).forEach(function (k) { local[k] = fresh[k]; });
+  }
+  function docFingerprint(d) { return d.id + "|" + JSON.stringify(stripLocal(d, ["id", "text", "renderedHtml", "lastIndex", "totalSentences"])) + "|" + (d.text || "").length + "|" + (d.renderedHtml || "").length; }
+
+  /* ---- información de sincronización guardada en este dispositivo ---- */
+  function metaBlank(uid) { return { userId: uid, since: { folders: "", docs: "", tasks: "", progress: "" }, items: {}, prog: {}, pdf: {}, pdfBad: {}, blocked: {} }; }
+  function metaLoad() {
+    return kvOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var rq = db.transaction("kv").objectStore("kv").get("syncmeta");
+        rq.onsuccess = function () { try { res(rq.result ? JSON.parse(rq.result) : null); } catch (e) { res(null); } };
+        rq.onerror = function () { rej(rq.error); };
+      });
+    });
+  }
+  function metaSave() {
+    var txt = JSON.stringify(CLOUD.meta);
+    return kvOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").put(txt, "syncmeta");
+        tx.oncomplete = function () { res(); }; tx.onerror = tx.onabort = function () { rej(tx.error); };
+      });
+    });
+  }
+
+  /* ---- permisos (la base de datos es quien manda; esto solo evita intentos inútiles) ---- */
+  function roleOf(folderId) {
+    var fid = folderId, guard = 0;
+    while (fid && guard++ < 40) {
+      var f = findLocal("folders", fid);
+      if (!f) return "reader";
+      if (!f.cloudOwner || f.cloudOwner === CLOUD.user.id) return "owner";
+      if (CLOUD.myRoles[f.id]) return CLOUD.myRoles[f.id];
+      fid = f.parentId;
+    }
+    return "owner";
+  }
+  function canWrite(kind, o) {
+    if (kind === "folders") return roleOf(o.id) !== "reader";
+    if (kind === "docs") return roleOf(o.folderId) !== "reader" || (o.folderId === null);
+    return !o.cloudOwner || o.cloudOwner === CLOUD.user.id;
+  }
+
+  /* ---- bajar cambios de la nube ---- */
+  function conflictCopy(local) {
+    var c = JSON.parse(JSON.stringify(local)); delete c.cloudOwner;
+    c.id = "d" + Date.now() + Math.random().toString(36).slice(2, 8);
+    c.title = (local.title || "Documento") + " (conflicto " + new Date().toLocaleDateString("es") + ")";
+    return c;
+  }
+  function applyRemote(kind, r) {
+    var list = state[kind], items = CLOUD.meta.items, local = null, i, m = items[r.id];
+    for (i = 0; i < list.length; i++) if (list[i].id === r.id) { local = list[i]; break; }
+    if (m && r.rev != null && m.rev === r.rev) return "same";
+    var active = kind === "docs" && state.activeId === r.id && readerOpen();
+    if (r.deleted) {
+      if (!local) { delete items[r.id]; return "same"; }
+      if (active) return "held";
+      if (kind === "docs" && m && rowHash(kind, local) !== m.hash) {
+        var rescue = conflictCopy(local); rescue.title = (local.title || "Documento") + " (recuperado)"; state.docs.push(rescue);
+        try { toast("Borraron «" + local.title + "» mientras tú lo editabas. Guardé tu versión como «" + rescue.title + "»."); } catch (e) {}
+      }
+      list.splice(i, 1); delete items[r.id]; return "applied";
+    }
+    if (!local) {
+      if (m && m.rev >= r.rev) return "same";
+      var fresh = fromRow(kind, r); list.push(fresh);
+      items[r.id] = { k: kind, rev: r.rev, hash: rowHash(kind, fresh) };
+      return "applied";
+    }
+    if (active) return "held";
+    var dirty = !!m && rowHash(kind, local) !== m.hash;
+    if (dirty && kind === "docs") {
+      var copy = conflictCopy(local); state.docs.push(copy);
+      try { toast("«" + local.title + "» cambió en dos lugares a la vez. Guardé tu versión como «" + copy.title + "»."); } catch (e) {}
+    }
+    var fresh2 = fromRow(kind, r); replaceInto(local, fresh2);
+    items[r.id] = { k: kind, rev: r.rev, hash: rowHash(kind, local) };
+    return "applied";
+  }
+  function pageSize(kind) { return kind === "docs" ? 20 : 200; }
+  function pullTable(kind, stats) {
+    var since = CLOUD.meta.since[kind], maxSeen = since, held = null, pages = 0;
+    function page(from) {
+      var q = CLOUD.client.from(kind).select("*").order("updated_at", { ascending: true }).limit(pageSize(kind));
+      if (from) q = q.gte("updated_at", from);
+      return q.then(unwrap).then(function (rows) {
+        rows = rows || [];
+        rows.forEach(function (r) {
+          var res = applyRemote(kind, r);
+          if (res === "held") { if (!held || r.updated_at < held) held = r.updated_at; }
+          if (r.updated_at > maxSeen) maxSeen = r.updated_at;
+          if (res === "applied") stats.n++;
+        });
+        if (rows.length >= pageSize(kind) && ++pages < 40 && rows[rows.length - 1].updated_at !== from) return page(rows[rows.length - 1].updated_at);
+      });
+    }
+    return page(since || null).then(function () { CLOUD.meta.since[kind] = held || maxSeen; });
+  }
+  function pullMembers() {
+    return CLOUD.client.from("folder_members").select("*").then(unwrap).then(function (rows) {
+      var by = {}, my = {}, me = CLOUD.user.email;
+      (rows || []).forEach(function (r) { (by[r.folder_id] = by[r.folder_id] || []).push({ email: r.invited_email, role: r.role }); if (r.invited_email === me) my[r.folder_id] = r.role; });
+      if (JSON.stringify(my) !== JSON.stringify(CLOUD.myRoles)) CLOUD.meta.blocked = {};      // cambió tu permiso: reintenta lo bloqueado
+      CLOUD.members = by; CLOUD.myRoles = my;
+      var asks = [];
+      state.folders.forEach(function (f) {
+        var mine = !f.cloudOwner || f.cloudOwner === CLOUD.user.id;
+        f.cloudMembers = mine && by[f.id] ? by[f.id].length : 0;
+        f.cloudRole = mine ? "owner" : (my[f.id] || undefined);
+        if (!mine && my[f.id] && !CLOUD.ownerEmail[f.id]) asks.push(f);
+        if (!mine && CLOUD.ownerEmail[f.id]) f.cloudOwnerEmail = CLOUD.ownerEmail[f.id];
+      });
+      return seqRun(asks, function (f) {
+        return CLOUD.client.rpc("folder_owner_email", { fid: f.id }).then(function (r) { if (!r.error && r.data) { CLOUD.ownerEmail[f.id] = r.data; f.cloudOwnerEmail = r.data; } });
+      });
+    });
+  }
+
+  /* ---- subir cambios locales ---- */
+  function isPermission(e) { return e && (String(e.code) === "42501" || e.status === 403); }
+  function pushAll(stats) {
+    var items = CLOUD.meta.items, jobs = [], me = CLOUD.user.id;
+    CLOUD_TABLES.forEach(function (kind) {
+      var seen = {};
+      state[kind].forEach(function (o) {
+        seen[o.id] = 1;
+        var m = items[o.id], h, fp = null;
+        if (kind === "docs" && m) { fp = docFingerprint(o); if (CLOUD.fp[o.id] === fp) return; }     // atajo: el documento no ha cambiado desde la última vez que se comprobó
+        h = rowHash(kind, o);
+        if (m && m.hash === h) { if (fp) CLOUD.fp[o.id] = fp; return; }
+        if (CLOUD.meta.blocked[o.id] === h) return;
+        if (!canWrite(kind, o)) { CLOUD.meta.blocked[o.id] = h; cloudWarnOnce("ro", "Una carpeta compartida contigo es de solo lectura: tus cambios ahí se quedan solo en este dispositivo."); return; }
+        jobs.push({ kind: kind, o: o, m: m, h: h, fp: fp, op: m ? "update" : "insert" });
+      });
+      Object.keys(items).forEach(function (id) { if (items[id].k === kind && !seen[id]) jobs.push({ kind: kind, id: id, m: items[id], op: "delete" }); });
+    });
+    var order = { folders: 0, docs: 1, tasks: 2 };
+    jobs.sort(function (a, b) { return (a.op === "delete" ? 3 : order[a.kind]) - (b.op === "delete" ? 3 : order[b.kind]); });
+    return seqRun(jobs, function (j, n, total) {
+      if (total > 6) { CLOUD.progress = "Sincronizando " + n + " de " + total + "…"; if (n % 3 === 0) renderBk(); }
+      return pushJob(j).then(function () { stats.pushed++; if (n % 10 === 0) return metaSave(); });
+    });
+  }
+  function fetchOne(kind, id) { return CLOUD.client.from(kind).select("*").eq("id", id).then(unwrap).then(function (rows) { return rows && rows[0] ? rows[0] : null; }); }
+  function pushJob(j) {
+    var items = CLOUD.meta.items, kind = j.kind;
+    if (j.op === "insert") {
+      return CLOUD.client.from(kind).insert(toRow(kind, j.o)).select("rev").then(function (r) {
+        if (r.error) {
+          if (String(r.error.code) === "23505") return fetchOne(kind, j.o.id).then(function (remote) { delete items[j.o.id]; if (remote) applyRemote(kind, remote); });
+          if (isPermission(r.error)) { CLOUD.meta.blocked[j.o.id] = j.h; cloudWarnOnce("perm", "No tienes permiso para guardar «" + (j.o.title || j.o.name || "un elemento") + "» en la nube."); return; }
+          throw cloudErr(r.error);
+        }
+        var row = Array.isArray(r.data) ? r.data[0] : r.data;
+        items[j.o.id] = { k: kind, rev: row.rev, hash: j.h };
+      });
+    }
+    if (j.op === "update") {
+      var patch = toRow(kind, j.o); delete patch.id; patch.deleted = false;
+      return CLOUD.client.from(kind).update(patch).eq("id", j.o.id).eq("rev", j.m.rev).select("rev").then(function (r) {
+        if (r.error) { if (isPermission(r.error)) { CLOUD.meta.blocked[j.o.id] = j.h; return; } throw cloudErr(r.error); }
+        if (r.data && r.data.length) { items[j.o.id] = { k: kind, rev: r.data[0].rev, hash: j.h }; if (j.fp) CLOUD.fp[j.o.id] = j.fp; return; }
+        return fetchOne(kind, j.o.id).then(function (remote) {
+          if (!remote) { CLOUD.meta.blocked[j.o.id] = j.h; return; }
+          if (remote.rev === j.m.rev) { CLOUD.meta.blocked[j.o.id] = j.h; return; }           // misma versión: es un permiso, no un conflicto
+          applyRemote(kind, remote);
+        });
+      });
+    }
+    return CLOUD.client.from(kind).update({ deleted: true }).eq("id", j.id).eq("rev", j.m.rev).select("rev").then(function (r) {
+      if (r.error && !isPermission(r.error)) throw cloudErr(r.error);
+      if (!r.error && r.data && r.data.length) { delete items[j.id]; return; }
+      return fetchOne(kind, j.id).then(function (remote) {
+        delete items[j.id];
+        if (remote && !remote.deleted) { applyRemote(kind, remote); cloudWarnOnce("nodel", "No pudiste borrar un elemento compartido (o alguien lo editó): lo restauré."); }
+      });
+    });
+  }
+
+  /* ---- avance de lectura (personal) ---- */
+  function syncProgress(force) {
+    var prog = CLOUD.meta.prog, items = CLOUD.meta.items, me = CLOUD.user.id;
+    return CLOUD.client.from("doc_progress").select("*").then(unwrap).then(function (rows) {
+      (rows || []).forEach(function (r) {
+        var d = findLocal("docs", r.doc_id); if (!d) return;
+        var cur = d.lastIndex || 0, known = prog[r.doc_id] === undefined ? 0 : prog[r.doc_id];
+        if (cur === known && r.last_index !== cur) { d.lastIndex = r.last_index; CLOUD.progChanged = true; }
+        if (cur === known || r.last_index === cur) prog[r.doc_id] = r.last_index;
+      });
+      if (!force && Date.now() - CLOUD.lastProg < 20000) return;
+      var out = [];
+      state.docs.forEach(function (d) {
+        var cur = d.lastIndex || 0;
+        if (items[d.id] && cur !== (prog[d.id] === undefined ? 0 : prog[d.id])) out.push({ user_id: me, doc_id: d.id, last_index: cur });
+      });
+      if (!out.length) return;
+      CLOUD.lastProg = Date.now();
+      return CLOUD.client.from("doc_progress").upsert(out, { onConflict: "user_id,doc_id" }).then(function (r) {
+        if (r.error) throw cloudErr(r.error);
+        out.forEach(function (x) { prog[x.doc_id] = x.last_index; });
+      });
+    });
+  }
+
+  /* ---- PDFs ---- */
+  function uploadPdf(d) {
+    var key = d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
+    return pdfDbGet(key).then(function (buf) {
+      if (!buf) return;
+      return CLOUD.client.from("pdf_files").insert({ key: key, size_bytes: buf.byteLength }).then(function (r) {
+        if (r.error && String(r.error.code) !== "23505") {
+          if (String(r.error.code) === "54000" || /espacio/i.test(r.error.message || "")) { m.pdfBad[key] = 1; cloudWarnOnce("quota", "No hay espacio en tu nube para «" + d.title + "». El PDF queda solo en este dispositivo."); return "stop"; }
+          throw cloudErr(r.error);
+        }
+        return CLOUD.client.storage.from("pdfs").upload(me + "/" + key + ".pdf", new Blob([buf], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true }).then(function (u) {
+          if (u && u.error) {
+            if (/maximum|exceed|size|413/i.test((u.error.message || "") + (u.error.statusCode || ""))) {
+              m.pdfBad[key] = 1; cloudWarnOnce("big", "«" + d.title + "» pesa demasiado para la nube (máximo 50 MB). Queda solo en este dispositivo.");
+              return CLOUD.client.from("pdf_files").delete().eq("key", key).then(function () { return "stop"; });
+            }
+            throw cloudErr(u.error);
+          }
+          m.pdf[key] = 1;
+        });
+      });
+    });
+  }
+  function syncPdfs() {
+    var me = CLOUD.user.id, m = CLOUD.meta, jobs = state.docs.filter(function (d) { return d.pdfKey && (!d.cloudOwner || d.cloudOwner === me) && !m.pdf[d.pdfKey] && !m.pdfBad[d.pdfKey] && m.items[d.id]; });
+    return seqRun(jobs, function (d, n, total) { CLOUD.progress = "Subiendo PDFs " + n + " de " + total + "…"; renderBk(); return uploadPdf(d); });
+  }
+  function cloudGetPdf(doc) {
+    if (!CLOUD.user || !CLOUD.client || !doc || !doc.pdfKey) return Promise.resolve(null);
+    var owner = doc.cloudOwner || CLOUD.user.id;
+    return CLOUD.client.storage.from("pdfs").download(owner + "/" + doc.pdfKey + ".pdf").then(function (r) {
+      if (!r || r.error || !r.data) return null;
+      return r.data.arrayBuffer().then(function (buf) { return pdfDbPut(doc.pdfKey, buf.slice(0)).then(function () { return buf; }); });
+    }).catch(function () { return null; });
+  }
+  function cloudDownloadAllPdfs() {
+    var docs = state.docs.filter(function (d) { return d.pdfKey; }), got = 0;
+    return seqRun(docs, function (d, n, total) {
+      return pdfDbGet(d.pdfKey).then(function (b) { if (b) return; CLOUD.progress = "Descargando PDFs " + n + " de " + total + "…"; renderBk(); return cloudGetPdf(d).then(function (x) { if (x) got++; }); });
+    }).then(function () { CLOUD.progress = ""; renderBk(); return got; });
+  }
+  function cloudUsage() {
+    return CLOUD.client.rpc("my_usage").then(function (r) { if (!r.error && r.data) CLOUD.usage = r.data; });
+  }
+
+  /* ---- quitar lo que ya no te comparten ---- */
+  function reconcileVisible() {
+    var theirs = {};
+    return Promise.all(CLOUD_TABLES.map(function (t) {
+      return CLOUD.client.from(t).select("id").neq("owner", CLOUD.user.id).then(unwrap).then(function (rows) { theirs[t] = {}; (rows || []).forEach(function (r) { theirs[t][r.id] = 1; }); });
+    })).then(function () {
+      var removed = 0;
+      CLOUD_TABLES.forEach(function (t) {
+        state[t] = state[t].filter(function (o) {
+          var foreign = o.cloudOwner && o.cloudOwner !== CLOUD.user.id;
+          if (foreign && !theirs[t][o.id] && !(t === "docs" && state.activeId === o.id && readerOpen())) { delete CLOUD.meta.items[o.id]; removed++; return false; }
+          return true;
+        });
+      });
+      return removed;
+    });
+  }
+
+  /* ---- ciclo de sincronización ---- */
+  function cloudSchedule(ms) { if (!CLOUD.user) return; clearTimeout(CLOUD.timer); CLOUD.timer = setTimeout(function () { CLOUD.timer = null; cloudSync(); }, ms); }
+  function cloudFriendly(e) {
+    var s = String((e && e.message) || e || "");
+    if (/Failed to fetch|NetworkError|Load failed|network/i.test(s)) return "sin conexión con la nube";
+    if (/JWT|401|expired|not authenticated/i.test(s)) return "tu sesión venció: vuelve a iniciarla en Ajustes";
+    return s.slice(0, 90) || "error desconocido";
+  }
+  function refreshFromStore() {
+    return kvGetLibrary().then(function (lib) { if (lib) { mergeWithStore(lib, false); snapIds(); } }).catch(function () {});
+  }
+  function withLock(fn) {
+    if (typeof navigator !== "undefined" && navigator.locks && navigator.locks.request) return navigator.locks.request("folio-sync", { ifAvailable: true }, function (l) { return l ? fn() : "locked"; });
+    return fn();
+  }
+  function cloudSync(force) {
+    if (!CLOUD.user || !CLOUD.client || CLOUD.busy || !navigator.onLine) return Promise.resolve(false);
+    if (SV.dirty || SV.busy || SV.timer) { cloudSchedule(2500); return Promise.resolve(false); }
+    CLOUD.busy = true; CLOUD.status = "sync"; CLOUD.error = ""; CLOUD.progress = ""; renderBk();
+    var stats = { n: 0, pushed: 0 };
+    return withLock(function () {
+      return refreshFromStore().then(metaLoad).then(function (m) {
+        CLOUD.meta = (m && m.userId === CLOUD.user.id) ? m : metaBlank(CLOUD.user.id);
+        CLOUD.meta.pdfBad = CLOUD.meta.pdfBad || {}; CLOUD.meta.blocked = CLOUD.meta.blocked || {}; CLOUD.meta.prog = CLOUD.meta.prog || {}; CLOUD.meta.pdf = CLOUD.meta.pdf || {};
+      }).then(function () { return pullTable("folders", stats); }).then(pullMembers)
+        .then(function () { return pullTable("docs", stats); }).then(function () { return pullTable("tasks", stats); })
+        .then(function () { return pushAll(stats); })
+        .then(function () { return syncProgress(force); })
+        .then(function () { return syncPdfs(); })
+        .then(function () { CLOUD.tick++; if (CLOUD.tick % 10 === 1) return reconcileVisible().then(function (n) { stats.n += n; }); })
+        .then(cloudUsage)
+        .then(function () { return metaSave(); })
+        .then(function () { if (stats.n || CLOUD.progChanged) { CLOUD.progChanged = false; saveLibrary(); renderLibrary(); renderSideList(); } });
+    }).then(function (r) { if (r !== "locked") { CLOUD.lastSync = Date.now(); CLOUD.status = "ok"; } })
+      .catch(function (e) { CLOUD.status = "error"; CLOUD.error = cloudFriendly(e); })
+      .then(function () { CLOUD.busy = false; CLOUD.progress = ""; renderBk(); return CLOUD.status === "ok"; });
+  }
+  function cloudLiveTick(t) { clearTimeout(CLOUD.liveT); if (t === "folder_members") CLOUD.tick = 0; CLOUD.liveT = setTimeout(function () { cloudSchedule(100); }, 700); }
+  function cloudStop() {
+    if (CLOUD.channel && CLOUD.client) { try { CLOUD.client.removeChannel(CLOUD.channel); } catch (e) {} }
+    CLOUD.channel = null; clearInterval(CLOUD.iv); clearTimeout(CLOUD.timer); clearTimeout(CLOUD.liveT);
+  }
+  function cloudLive() {
+    cloudStop();
+    try {
+      var ch = CLOUD.client.channel("folio-live-" + CLOUD.user.id);
+      ["folders", "docs", "tasks", "doc_progress", "folder_members"].forEach(function (t) { ch.on("postgres_changes", { event: "*", schema: "public", table: t }, function () { cloudLiveTick(t); }); });
+      ch.subscribe(); CLOUD.channel = ch;
+    } catch (e) {}
+    CLOUD.iv = setInterval(function () { if (!document.hidden) cloudSchedule(100); }, 90000);
+  }
+
+  /* ---- sesión ---- */
+  function loadSupabaseLib() {
+    if (window.supabase && window.supabase.createClient) return Promise.resolve();
+    return new Promise(function (res, rej) {
+      var sc = document.createElement("script"); sc.src = "libs/supabase.js";
+      sc.onload = function () { res(); }; sc.onerror = function () { rej(new Error("No se pudo cargar libs/supabase.js")); };
+      document.head.appendChild(sc);
+    });
+  }
+  function cloudSession(session) {
+    var u = session && session.user ? { id: session.user.id, email: String(session.user.email || "").toLowerCase() } : null;
+    if (!u) { if (CLOUD.user) { CLOUD.user = null; cloudStop(); renderBk(); } return; }
+    if (CLOUD.user && CLOUD.user.id === u.id) { CLOUD.user = u; return; }
+    CLOUD.user = u;
+    metaLoad().then(function (m) {
+      if (m && m.userId && m.userId !== u.id && (state.docs.length || state.folders.length)) {
+        showConfirm("Este dispositivo tiene una biblioteca de otra cuenta. ¿Agregarla a la cuenta " + u.email + "? Si dices que no, cerraré la sesión.", function (ok) {
+          if (!ok) { cloudSignOut(); return; }
+          CLOUD.meta = metaBlank(u.id); metaSave().then(cloudStart);
+        });
+      } else cloudStart();
+    }).catch(cloudStart);
+  }
+  function cloudStart() { cloudLive(); cloudSchedule(100); renderBk(); try { toast("Sesión iniciada como " + CLOUD.user.email + ". Sincronizando…"); } catch (e) {} }
+  function cloudInit() {
+    if (!cloudConfigured()) return Promise.resolve(false);
+    return loadSupabaseLib().then(function () {
+      var c = window.FOLIO_CLOUD;
+      CLOUD.client = window.supabase.createClient(c.url, c.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce", storageKey: "folio-auth" } });
+      CLOUD.client.auth.onAuthStateChange(function (ev, session) { cloudSession(session); });
+      return CLOUD.client.auth.getSession().then(function (r) { cloudSession(r && r.data && r.data.session); return true; });
+    }).catch(function (e) { CLOUD.error = cloudFriendly(e); return false; });
+  }
+  function unwrapAuth(r) { if (r && r.error) throw cloudErr(r.error); return r ? r.data : null; }
+  function cloudRedirect() { return location.origin + location.pathname; }
+  function cloudSendCode(email) { return CLOUD.client.auth.signInWithOtp({ email: String(email).trim().toLowerCase(), options: { emailRedirectTo: cloudRedirect(), shouldCreateUser: true } }).then(unwrapAuth); }
+  function cloudVerifyCode(email, token) { return CLOUD.client.auth.verifyOtp({ email: String(email).trim().toLowerCase(), token: String(token).trim(), type: "email" }).then(unwrapAuth); }
+  function cloudGoogle() { return CLOUD.client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: cloudRedirect() } }).then(unwrapAuth); }
+  function cloudSignOut() { return CLOUD.client.auth.signOut().then(function () { CLOUD.user = null; cloudStop(); renderBk(); }); }
+
+  /* ---- compartir carpetas ---- */
+  function cloudWhenSynced(folderId) {
+    var t0 = Date.now();
+    return new Promise(function (res, rej) {
+      (function check() {
+        if (CLOUD.meta && CLOUD.meta.items[folderId]) return res();
+        if (Date.now() - t0 > 25000) return rej(new Error("La carpeta aún no se sincroniza. Inténtalo en un momento."));
+        if (!CLOUD.busy) cloudSync(); setTimeout(check, 400);
+      })();
+    });
+  }
+  function cloudShare(folder, email, role) {
+    email = String(email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return Promise.reject(new Error("Escribe un correo válido."));
+    if (email === CLOUD.user.email) return Promise.reject(new Error("Ese es tu propio correo."));
+    return cloudWhenSynced(folder.id).then(function () {
+      return CLOUD.client.from("folder_members").upsert({ folder_id: folder.id, invited_email: email, role: role === "editor" ? "editor" : "reader" }, { onConflict: "folder_id,invited_email" }).then(unwrap);
+    }).then(pullMembers);
+  }
+  function cloudUnshare(folderId, email) {
+    return CLOUD.client.from("folder_members").delete().eq("folder_id", folderId).eq("invited_email", String(email).toLowerCase()).then(unwrap).then(pullMembers);
+  }
+  function cloudLeave(folder) {
+    return cloudUnshare(folder.id, CLOUD.user.email).then(function () { return reconcileVisible(); }).then(function (n) { saveLibrary(); renderLibrary(); renderSideList(); return n; });
+  }
+  /* ===== NUBE:FIN ===== */
+
+  /* ---- interfaz de la nube ---- */
+  function uiEl(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; }
+  function uiBtn(parent, text, cls, fn) { var b = uiEl("button", "st-btn" + (cls ? " " + cls : ""), text); b.type = "button"; b.addEventListener("click", fn); parent.appendChild(b); return b; }
+  function cloudStatus() {
+    if (CLOUD.status === "sync") return { ok: true, text: "☁ " + (CLOUD.progress || "Sincronizando…") };
+    if (CLOUD.status === "error") return { ok: false, text: "⚠ Sin sincronizar: " + CLOUD.error };
+    if (!CLOUD.lastSync) return { ok: true, text: "☁ Conectado" };
+    var t = Math.floor((Date.now() - CLOUD.lastSync) / 60000);
+    return { ok: true, text: t < 1 ? "☁ Sincronizado ahora" : "☁ Sincronizado hace " + t + " min" };
+  }
+  function cloudBadge(f) {
+    if (f.cloudMembers > 0) return " 👥";
+    if (f.cloudOwner && CLOUD.user && f.cloudOwner !== CLOUD.user.id && f.cloudRole) return " 👥";
+    return "";
+  }
+  function fmtMBc(b) { return (b / 1048576).toFixed(b >= 1.05e7 ? 0 : 1) + " MB"; }
+  function cloudSettingsSection(sc, close) {
+    if (!cloudConfigured()) { sc.appendChild(uiEl("p", "", "La nube todavía no está configurada en esta copia de Folio. Quien administra Folio debe pegar los datos de Supabase en el archivo config.js.")); return; }
+    if (!CLOUD.client) { sc.appendChild(uiEl("p", "", "Cargando la nube… Si no aparece nada, revisa tu conexión a internet y recarga.")); return; }
+    if (CLOUD.user) {
+      sc.appendChild(uiEl("p", "", "Conectado como " + CLOUD.user.email + ". Tu biblioteca se mantiene igual en todos tus dispositivos y puedes compartir carpetas."));
+      sc.appendChild(uiEl("p", "", cloudStatus().text + (CLOUD.usage ? " · PDFs en la nube: " + fmtMBc(CLOUD.usage.used_bytes) + " de " + CLOUD.usage.quota_mb + " MB" : "")));
+      uiBtn(sc, "Sincronizar ahora", "main", function () { close(); cloudSync(true); });
+      uiBtn(sc, "Descargar PDFs para usar sin conexión", "", function () {
+        close(); toast("Descargando tus PDFs…");
+        cloudDownloadAllPdfs().then(function (n) { toast(n ? "Listo: " + n + " PDFs descargados." : "Todos tus PDFs ya están en este dispositivo."); });
+      });
+      uiBtn(sc, "Cerrar sesión", "danger", function () { close(); cloudSignOut().then(function () { toast("Sesión cerrada. Tus documentos siguen en este dispositivo."); }); });
+      return;
+    }
+    sc.appendChild(uiEl("p", "", "Inicia sesión para tener tu biblioteca en todos tus dispositivos y compartir carpetas con otras personas."));
+    var email = uiEl("input"); email.type = "email"; email.placeholder = "tu correo"; email.autocomplete = "email"; sc.appendChild(email);
+    var err = uiEl("div", "pf-err"); sc.appendChild(err);
+    var codeBox = uiEl("div"); codeBox.style.display = "none"; sc.appendChild(codeBox);
+    var code = uiEl("input"); code.placeholder = "Código de 6 dígitos del correo"; code.inputMode = "numeric"; code.autocomplete = "one-time-code"; codeBox.appendChild(code);
+    uiBtn(codeBox, "Entrar con el código", "main", function () {
+      err.textContent = ""; cloudVerifyCode(email.value, code.value).then(function () { close(); }).catch(function (e) { err.textContent = "Ese código no es válido o ya venció. Pide uno nuevo."; });
+    });
+    uiBtn(sc, "Enviarme un código o enlace", "main", function () {
+      err.textContent = "";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) { err.textContent = "Escribe un correo válido."; return; }
+      cloudSendCode(email.value).then(function () { codeBox.style.display = "block"; err.style.color = "var(--text-soft)"; err.textContent = "Listo. Revisa tu correo (y la carpeta de spam): trae un enlace y un código. Si instalaste Folio como app, usa el código."; code.focus(); })
+        .catch(function (e) { err.style.color = ""; err.textContent = "No se pudo enviar el correo: " + cloudFriendly(e); });
+    });
+    uiBtn(sc, "Entrar con Google", "", function () { cloudGoogle().catch(function (e) { err.textContent = "No se pudo abrir Google: " + cloudFriendly(e); }); });
+  }
+  function openShareDialog(folder) {
+    if (!cloudConfigured()) { toast("La nube todavía no está configurada en esta copia de Folio."); return; }
+    if (!CLOUD.user) { toast("Primero inicia sesión en la nube (barra de abajo a la izquierda → Ajustes)."); openSettings(); return; }
+    var back = uiEl("div", "pf-back"), card = uiEl("div", "pf-card st-card"); back.appendChild(card);
+    function close() { back.remove(); }
+    card.appendChild(uiEl("h3", "", "Compartir «" + folder.name + "»"));
+    var mine = !folder.cloudOwner || folder.cloudOwner === CLOUD.user.id;
+    if (!mine) {
+      card.appendChild(uiEl("p", "", "Esta carpeta la compartió " + (folder.cloudOwnerEmail || "otra persona") + " contigo como " + (folder.cloudRole === "editor" ? "editor" : "lector") + "."));
+      if (folder.cloudRole) {
+        uiBtn(card, "Salir de esta carpeta", "danger", function () {
+          showConfirm("¿Salir de «" + folder.name + "»? Dejarás de ver sus documentos en este dispositivo.", function (ok) {
+            if (ok) cloudLeave(folder).then(function () { close(); toast("Saliste de la carpeta."); }).catch(function (e) { toast("No se pudo salir: " + cloudFriendly(e)); });
+          });
+        });
+      } else card.appendChild(uiEl("p", "", "Es una subcarpeta de una carpeta compartida: los permisos se manejan en la carpeta principal."));
+    } else {
+      card.appendChild(uiEl("p", "", "Quien invites verá esta carpeta, sus subcarpetas y sus documentos al iniciar sesión con ese correo. Tus chats con la IA siguen siendo privados."));
+      var list = uiEl("div", "st-sec"); card.appendChild(list);
+      var renderList = function () {
+        list.innerHTML = ""; list.appendChild(uiEl("h4", "", "Personas con acceso"));
+        var ms = CLOUD.members[folder.id] || [];
+        if (!ms.length) list.appendChild(uiEl("p", "", "Todavía no compartes esta carpeta."));
+        ms.forEach(function (m) {
+          var row = uiEl("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:13px;";
+          var t = uiEl("span", "", m.email + " · " + (m.role === "editor" ? "Editor" : "Lector")); t.style.flex = "1"; row.appendChild(t);
+          uiBtn(row, "Quitar", "danger", function () { cloudUnshare(folder.id, m.email).then(renderList).catch(function (e) { toast("No se pudo quitar: " + cloudFriendly(e)); }); });
+          list.appendChild(row);
+        });
+      };
+      renderList();
+      var form = uiEl("div", "st-sec"); form.appendChild(uiEl("h4", "", "Invitar a alguien"));
+      var mail = uiEl("input"); mail.type = "email"; mail.placeholder = "correo de la persona"; form.appendChild(mail);
+      var role = uiEl("select"); role.style.cssText = "width:100%;padding:10px;margin-bottom:9px;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);";
+      role.innerHTML = '<option value="reader">Lector: puede leer, escuchar y hacer sus propios resúmenes</option><option value="editor">Editor: además puede agregar y cambiar documentos</option>';
+      form.appendChild(role);
+      var err = uiEl("div", "pf-err"); form.appendChild(err);
+      uiBtn(form, "Invitar", "main", function () {
+        err.textContent = "";
+        cloudShare(folder, mail.value, role.value).then(function () { toast("Listo. " + mail.value.trim().toLowerCase() + " verá la carpeta al iniciar sesión con ese correo."); mail.value = ""; renderList(); renderLibrary(); })
+          .catch(function (e) { err.textContent = e.message || "No se pudo compartir."; });
+      });
+      card.appendChild(form);
+    }
+    var row = uiEl("div", "pf-row"); row.style.marginTop = "14px"; uiBtn(row, "Cerrar", "", close); card.appendChild(row);
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    document.body.appendChild(back);
+  }
+
   /* --- Ajustes (se abren tocando la barra de abajo a la izquierda) --- */
   function indepStatus() {
     var t = parseInt(lsGet("folioLastExport") || "0", 10);
@@ -1256,6 +1778,8 @@
       btn(s2, k ? "Cambiar llave" : "Pegar mi llave", "main", function () { close(); askGeminiKey(); });
       if (k) btn(s2, "Borrar llave", "danger", function () { lsDel("folioGeminiKey"); lsDel("folioGeminiModels"); close(); toast("Llave borrada de este dispositivo."); });
     }
+
+    var sN = sec("Nube y sincronización"); cloudSettingsSection(sN, close);
 
     var s3 = sec("Copia de seguridad");
     var st = SERVER.available ? null : indepStatus();
@@ -1366,11 +1890,12 @@
     var el = document.getElementById("backupStatus"); if (!el) return;
     var uso = KV.usage != null ? " · Navegador: " + fmtBytes(KV.usage) + " usados" : "";
     if (!navigator.onLine) uso += " · 📴 Sin internet";
-    var st = SERVER.available ? BKUI : indepStatus();
+    var st = CLOUD.user ? cloudStatus() : (SERVER.available ? BKUI : indepStatus());
     el.textContent = (PROFILE.name ? "👤 " + PROFILE.name + " · " : "") + st.text + uso;
     el.classList.add("pf-click"); el.onclick = openSettings;
     el.style.color = st.ok ? "" : "var(--danger)";
-    el.title = (SERVER.available ? (BKUI.ok ? "Tu biblioteca y tus PDF se están guardando también en la carpeta folio_datos." : "No se pudo guardar la copia. ¿Está abierta la ventana negra de iniciar-folio?")
+    el.title = CLOUD.user ? ("Conectado a la nube como " + CLOUD.user.email + ". Toca aquí para ver los ajustes.") + " " : "";
+    el.title += (SERVER.available ? (BKUI.ok ? "Tu biblioteca y tus PDF se están guardando también en la carpeta folio_datos." : "No se pudo guardar la copia. ¿Está abierta la ventana negra de iniciar-folio?")
       : "Tus documentos viven solo en este dispositivo. Toca aquí para descargar una copia, instalar la app o poner tu llave de IA.") +
       (KV.quota ? " Espacio disponible para Folio en este navegador: unos " + fmtBytes(KV.quota) + "." : "");
     if (KV.usage && KV.quota && KV.usage / KV.quota > 0.8 && !BK.warned) { BK.warned = true; toast("El almacenamiento del navegador está casi lleno (" + fmtBytes(KV.usage) + " de " + fmtBytes(KV.quota) + ")."); }
@@ -1459,6 +1984,7 @@
         });
     SV.busy = work.then(function () {
       snapIds();
+      try { cloudSchedule(8000); } catch (e) {}
       if (bc) { try { bc.postMessage("changed"); } catch (e) {} }
     }).catch(function () {
       SV.dirty = true;
@@ -1909,8 +2435,8 @@
       '<span class="row-date"></span>' +
       '<span class="row-progress"><span class="count"></span></span>' +
       '<button class="row-menu-btn">⋯</button>' +
-      '<div class="row-menu"><button data-act="rename">Renombrar</button><button data-act="color">Cambiar color…</button><button data-act="export">Descargar carpeta…</button><button class="danger" data-act="delete">Eliminar carpeta</button></div>';
-    row.querySelector(".label").textContent = folder.name;
+      '<div class="row-menu"><button data-act="rename">Renombrar</button><button data-act="color">Cambiar color…</button><button data-act="share">Compartir…</button><button data-act="export">Descargar carpeta…</button><button class="danger" data-act="delete">Eliminar carpeta</button></div>';
+    row.querySelector(".label").textContent = folder.name + cloudBadge(folder);
     row.querySelector(".row-date").textContent = fmtDate(folder.createdAt);
     row.querySelector(".count").textContent = count === 1 ? "1 elemento" : count + " elementos";
     row.querySelector("input[type=checkbox]").addEventListener("click", function (e) {
@@ -1921,6 +2447,7 @@
     menuBtn.addEventListener("click", function (e) { e.stopPropagation(); var open = menu.classList.contains("open"); closeAllRowMenus(); menu.classList.toggle("open", !open); });
     menu.querySelector('[data-act="rename"]').addEventListener("click", function (e) { e.stopPropagation(); closeAllRowMenus(); renameFolder(folder); });
     menu.querySelector('[data-act="color"]').addEventListener("click", function (e) { e.stopPropagation(); closeAllRowMenus(); openFolderColor(folder, menuBtn); });
+    menu.querySelector('[data-act="share"]').addEventListener("click", function (e) { e.stopPropagation(); closeAllRowMenus(); openShareDialog(folder); });
     menu.querySelector('[data-act="export"]').addEventListener("click", function (e) { e.stopPropagation(); closeAllRowMenus(); exportFolder(folder); });
     menu.querySelector('[data-act="delete"]').addEventListener("click", function (e) { e.stopPropagation(); closeAllRowMenus(); deleteFolder(folder.id); });
     attachDragHandlers(row, folder.id, "folder");
@@ -3977,7 +4504,8 @@
     pdfDbGet(doc.pdfKey).then(function (buf) {
       if (buf) return buf;
       return fetch("backup/pdf/" + doc.pdfKey).then(function (r) { if (!r.ok) throw new Error("missing"); return r.arrayBuffer(); })
-        .then(function (b) { pdfDbPut(doc.pdfKey, b.slice(0)); return b; });
+        .then(function (b) { pdfDbPut(doc.pdfKey, b.slice(0)); return b; })
+        .catch(function () { return cloudGetPdf(doc); });             // si no está en el servidor, se pide a la nube
     }).then(function (buf) {
       if (!buf) throw new Error("missing");
       pdfInitLib();
@@ -4093,7 +4621,9 @@
   window.addEventListener("online", function () {
     renderBk(); toast("Internet de vuelta.");
     if (SERVER.available) { try { scheduleBackup(); syncPdfBackups(); } catch (e) {} }
+    try { cloudSchedule(800); } catch (e) {}
   });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { try { cloudSchedule(800); } catch (e) {} } });
   Promise.all([loadLibraryAsync(), SERVER.ready]).then(function (r) {
     var how = r[0];
     snapIds(); slimLibrary();
@@ -4104,6 +4634,7 @@
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
       refreshUsage(); renderBk();
     }
+    cloudInit().then(function () { renderBk(); });
   });
 })();
 </script>
