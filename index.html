@@ -169,6 +169,9 @@
   .reader-inner{max-width:var(--rt-width,660px); margin:0 auto;}
   .folio-image-preview{display:block;max-width:100%;max-height:78vh;margin:18px auto 24px;border:1px solid var(--border);border-radius:8px;object-fit:contain;background:#f7f7f9}
   .reader-inner.image-on #readerText{display:none;}
+  #tableBody{position:relative;user-select:none;}
+  .row.drag-selected{background:rgba(91,61,245,.11);outline:1px solid rgba(91,61,245,.28);}
+  .selection-box{position:absolute;z-index:50;pointer-events:none;border:1px solid var(--accent);background:rgba(91,61,245,.12);border-radius:2px;}
   .reader-inner.pdf-on{max-width:1000px;}
   .st-card{max-width:460px; max-height:88vh; overflow:auto;}
   .st-sec{border-top:1px solid var(--border); padding:14px 0 4px; margin-top:12px;}
@@ -380,6 +383,8 @@
   .dropzone{border:1.5px dashed var(--border); border-radius:var(--radius); padding:28px 16px; text-align:center; color:var(--text-soft); font-size:13.5px; line-height:1.6;}
   .dropzone.hover{border-color:var(--accent); background:var(--accent-soft);}
   .dropzone input[type=file]{display:none;}
+  .inline-image-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:8px;}
+  .inline-image-tools .status-line{font-size:11px;}
   .status-line{font-size:12.5px; margin-top:10px; min-height:16px;}
   .status-line.error{color:var(--danger);}
   .status-line.ok{color:var(--moss);}
@@ -866,6 +871,7 @@
         <div class="field">
           <label class="field-label" for="pasteText">Texto</label>
           <textarea id="pasteText" placeholder="Pega aquí el texto que quieres escuchar…"></textarea>
+          <div class="inline-image-tools"><button type="button" class="btn ghost" id="insertInlineImageBtn">🖼️ Insertar imagen</button><input type="file" id="inlineImageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden><span id="inlineImageHint" class="status-line">Las imágenes aparecerán en el texto y se sincronizarán junto con el documento.</span></div>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" data-close>Cancelar</button>
@@ -960,7 +966,7 @@
     return pdfDbGet(key).then(function (buf) {
       if (buf) return buf;
       return fetch("backup/pdf/" + key).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).catch(function () { return null; })
-        .then(function (b) { return b || cloudGetPdf(state.docs.filter(function (d) { return d.pdfKey === key; })[0]); });
+        .then(function (b) { return b || cloudGetPdf(state.docs.filter(function (d) { return d.pdfKey === key || (d.inlineImages || []).some(function (x) { return x.key === key; }); })[0], key); });
     }).catch(function () { return null; });
   }
   function downloadBlob(blob, filename) {
@@ -979,8 +985,8 @@
       var tasks = JSON.parse(JSON.stringify(state.tasks.filter(function (t) { return docIds.indexOf(t.docId) !== -1; })));
       var zip = new JSZip(), jobs = [];
       docs.forEach(function (d) {
-        if (!d.pdfKey) return;
-        jobs.push(getPdfBytes(d.pdfKey).then(function (buf) { if (buf) zip.file("pdfs/" + d.pdfKey + ".pdf", buf); else { delete d.pdfKey; delete d.viewMode; } }));
+        var keys = [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean);
+        keys.forEach(function (key) { jobs.push(getPdfBytes(key).then(function (buf) { if (buf) zip.file("pdfs/" + key + ".pdf", buf); else if (key === d.pdfKey) { delete d.pdfKey; delete d.viewMode; } })); });
       });
       return Promise.all(jobs).then(function () {
         zip.file("carpeta.json", JSON.stringify({ formato: "folio-carpeta", version: 1, creado: Date.now(), raiz: folder.id, carpetas: folders, documentos: docs, tareas: tasks }));
@@ -1034,23 +1040,44 @@
       return { id: fmap[f.id], name: name, parentId: isRoot ? parent : (fmap[f.parentId] || fmap[m.raiz]),
         color: /^#[0-9a-fA-F]{6}$/.test(f.color || "") ? f.color : undefined, createdAt: Date.now() };
     });
-    var newDocs = [], chain = Promise.resolve();
+    var newDocs = [], chain = Promise.resolve(), ocrPendientes = 0;
+    var imagesNeedOcr = (m.documentos || []).some(function (x) { return x && x.attachmentType === "image" && !String(x.text || "").trim(); });
+    if (imagesNeedOcr) chain = confirmImageOcr().then(function (ok) { if (!ok) throw { code: "image_consent" }; });
     m.documentos.forEach(function (d0) {
       if (!d0 || typeof d0.text !== "string" || typeof d0.id !== "string") return;
-      var d = cleanData(d0), oldKey = d.pdfKey;
+      var d = cleanData(d0), oldKey = d.pdfKey, oldInlineImages = (d.inlineImages || []).slice();
       d.id = rid("d"); dmap[d0.id] = d.id;
       d.folderId = fmap[d0.folderId] || fmap[m.raiz];
       d.title = String(d.title || "Documento").slice(0, 200);
       if (!m.completa) { d.lastIndex = 0; d.createdAt = Date.now(); }
       delete d.pdfKey;
+      delete d.inlineImages;
       if (d.renderedHtml) { d.renderedHtml = sanitizeHtml(d.renderedHtml); d.renderedHtmlSource = textHash(d.text); } else { delete d.renderedHtml; delete d.renderedHtmlSource; }
       if (oldKey && /^[A-Za-z0-9_-]{1,80}$/.test(oldKey) && zip.file("pdfs/" + oldKey + ".pdf")) {
         chain = chain.then(function () { return zip.file("pdfs/" + oldKey + ".pdf").async("arraybuffer"); }).then(function (buf) {
           var nk = "pdf" + Date.now() + Math.random().toString(36).slice(2, 7);
           pdfBackupUpload(nk, buf.slice(0));
-          return pdfDbPut(nk, buf).then(function () { d.pdfKey = nk; });
+          return pdfDbPut(nk, buf).then(function () {
+            d.pdfKey = nk;
+            if (d.attachmentType === "image" && !String(d.text || "").trim()) {
+              if (buf.byteLength > 15 * 1024 * 1024) throw new Error("Una imagen del paquete supera 15 MB y no se puede reconocer con Gemini.");
+              if (typeof setFileStatus === "function") setFileStatus("Reconociendo texto de «" + d.title + "»…");
+              return geminiImageText(new Blob([buf], { type: d.mimeType || "image/png" })).then(function (text) { d.text = text; }, function () { ocrPendientes++; });
+            }
+          });
         });
       } else delete d.viewMode;
+      oldInlineImages.forEach(function (imageRef) {
+        var imageKey = imageRef && imageRef.key;
+        if (!imageKey || !/^[A-Za-z0-9_-]{1,100}$/.test(imageKey) || !zip.file("pdfs/" + imageKey + ".pdf")) return;
+        chain = chain.then(function () { return zip.file("pdfs/" + imageKey + ".pdf").async("arraybuffer"); }).then(function (buf) {
+          var newKey = "img" + Date.now() + Math.random().toString(36).slice(2, 7);
+          d.text = d.text.split("folio-image:" + imageKey).join("folio-image:" + newKey);
+          if (!d.inlineImages) d.inlineImages = [];
+          d.inlineImages.push({ key: newKey, name: String(imageRef.name || "imagen"), mimeType: String(imageRef.mimeType || "image/png") });
+          pdfBackupUpload(newKey, buf.slice(0)); return pdfDbPut(newKey, buf);
+        });
+      });
       newDocs.push(d);
     });
     var KINDS = { summary: 1, quiz: 1, cards: 1, chat: 1 }, newTasks = [];
@@ -1066,7 +1093,7 @@
       newTasks.forEach(function (t) { state.tasks.push(t); });
       state.tasks.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
       saveLibrary(); renderLibrary(); renderSideList();
-      return { nombre: rootName, docs: newDocs.length, tareas: newTasks.length };
+      return { nombre: rootName, docs: newDocs.length, tareas: newTasks.length, ocrPendientes: ocrPendientes };
     });
   }
   function importFolderPackage(file) {
@@ -1087,7 +1114,8 @@
       if (folioManifest) return folioManifest.async("string").then(function (txt) {
         var m; try { m = JSON.parse(txt); } catch (e) { throw new Error("El archivo está dañado."); }
         if (!m || m.formato !== "folio-carpeta" || !Array.isArray(m.carpetas) || !Array.isArray(m.documentos)) throw new Error("Este ZIP no es una carpeta válida de Folio.");
-        return importManifest(m, zip).then(function (r) { return { docs: r.docs, images: 0, imported: r.docs }; });
+        var imageCount = (m.documentos || []).filter(function (d) { return d && d.attachmentType === "image"; }).length;
+        return importManifest(m, zip).then(function (r) { return { docs: r.docs - imageCount, images: imageCount, imported: r.docs, ocrPendientes: r.ocrPendientes || 0 }; });
       });
       var entries = Object.keys(zip.files).filter(function (p) {
         var f = zip.files[p]; return !f.dir && !/(^|\/)\./.test(p) && /\.(md|txt|html?|png|jpe?g|webp|gif)$/i.test(p);
@@ -1511,8 +1539,8 @@
   }
 
   /* ---- PDFs ---- */
-  function uploadPdf(d) {
-    var key = d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
+  function uploadPdf(d, attachmentKey) {
+    var key = attachmentKey || d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
     return pdfDbGet(key).then(function (buf) {
       if (!buf) return;
       return CLOUD.client.from("pdf_files").insert({ key: key, size_bytes: buf.byteLength }).then(function (r) {
@@ -1535,21 +1563,23 @@
     });
   }
   function syncPdfs() {
-    var me = CLOUD.user.id, m = CLOUD.meta, jobs = state.docs.filter(function (d) { return d.pdfKey && (!d.cloudOwner || d.cloudOwner === me) && !m.pdf[d.pdfKey] && !m.pdfBad[d.pdfKey] && m.items[d.id]; });
-    return seqRun(jobs, function (d, n, total) { CLOUD.progress = "Subiendo PDFs " + n + " de " + total + "…"; renderBk(); return uploadPdf(d); });
+    var me = CLOUD.user.id, m = CLOUD.meta, jobs = [];
+    state.docs.forEach(function (d) { if ((!d.cloudOwner || d.cloudOwner === me) && m.items[d.id]) [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) { if (!m.pdf[key] && !m.pdfBad[key]) jobs.push({ doc: d, key: key }); }); });
+    return seqRun(jobs, function (job, n, total) { CLOUD.progress = "Subiendo archivos " + n + " de " + total + "…"; renderBk(); return uploadPdf(job.doc, job.key); });
   }
-  function cloudGetPdf(doc) {
-    if (!CLOUD.user || !CLOUD.client || !doc || !doc.pdfKey) return Promise.resolve(null);
+  function cloudGetPdf(doc, attachmentKey) {
+    var key = attachmentKey || (doc && doc.pdfKey);
+    if (!CLOUD.user || !CLOUD.client || !doc || !key) return Promise.resolve(null);
     var owner = doc.cloudOwner || CLOUD.user.id;
-    return CLOUD.client.storage.from("pdfs").download(owner + "/" + doc.pdfKey + ".pdf").then(function (r) {
+    return CLOUD.client.storage.from("pdfs").download(owner + "/" + key + ".pdf").then(function (r) {
       if (!r || r.error || !r.data) return null;
-      return r.data.arrayBuffer().then(function (buf) { return pdfDbPut(doc.pdfKey, buf.slice(0)).then(function () { return buf; }); });
+      return r.data.arrayBuffer().then(function (buf) { return pdfDbPut(key, buf.slice(0)).then(function () { return buf; }); });
     }).catch(function () { return null; });
   }
   function cloudDownloadAllPdfs() {
-    var docs = state.docs.filter(function (d) { return d.pdfKey; }), got = 0;
-    return seqRun(docs, function (d, n, total) {
-      return pdfDbGet(d.pdfKey).then(function (b) { if (b) return; CLOUD.progress = "Descargando PDFs " + n + " de " + total + "…"; renderBk(); return cloudGetPdf(d).then(function (x) { if (x) got++; }); });
+    var jobs = []; state.docs.forEach(function (d) { [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) { jobs.push({ doc: d, key: key }); }); }); var got = 0;
+    return seqRun(jobs, function (job, n, total) {
+      return pdfDbGet(job.key).then(function (b) { if (b) return; CLOUD.progress = "Descargando archivos " + n + " de " + total + "…"; renderBk(); return cloudGetPdf(job.doc, job.key).then(function (x) { if (x) got++; }); });
     }).then(function () { CLOUD.progress = ""; renderBk(); return got; });
   }
   function cloudUsage() {
@@ -1807,8 +1837,8 @@
       var tasks = JSON.parse(JSON.stringify(state.tasks.filter(function (t) { return ids.indexOf(t.docId) !== -1; })));
       var zip = new JSZip(), jobs = [];
       docs.forEach(function (d) {
-        if (!d.pdfKey) return;
-        jobs.push(getPdfBytes(d.pdfKey).then(function (buf) { if (buf) zip.file("pdfs/" + d.pdfKey + ".pdf", buf); else { delete d.pdfKey; delete d.viewMode; } }));
+        var keys = [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean);
+        keys.forEach(function (key) { jobs.push(getPdfBytes(key).then(function (buf) { if (buf) zip.file("pdfs/" + key + ".pdf", buf); else if (key === d.pdfKey) { delete d.pdfKey; delete d.viewMode; } })); });
       });
       return Promise.all(jobs).then(function () {
         zip.file("carpeta.json", JSON.stringify({ formato: "folio-carpeta", version: 1, completa: true, creado: Date.now(), raiz: rootId, carpetas: folders, documentos: docs, tareas: tasks }));
@@ -1993,7 +2023,9 @@
       var have = {}; (d.keys || []).forEach(function (k) { have[k] = 1; });
       var chain = Promise.resolve();
       state.docs.forEach(function (doc) {
-        if (doc.pdfKey && !have[doc.pdfKey]) chain = chain.then(function () { return pdfDbGet(doc.pdfKey).then(function (buf) { if (buf) return pdfBackupUpload(doc.pdfKey, buf); }); });
+        [doc.pdfKey].concat((doc.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) {
+          if (!have[key]) chain = chain.then(function () { return pdfDbGet(key).then(function (buf) { if (buf) return pdfBackupUpload(key, buf); }); });
+        });
       });
     }).catch(function () {});
   }
@@ -2257,6 +2289,8 @@
     while (i < lines.length) {
       var line = lines[i];
       if (!line.trim()) { i++; continue; }
+      var imageMatch = line.trim().match(/^!\[([^\]]*)\]\(folio-image:([^)]+)\)$/);
+      if (imageMatch) { blocks.push({ type: "image", alt: imageMatch[1], key: imageMatch[2] }); i++; continue; }
       var hMatch = line.match(/^(#{1,6})\s+(.*)$/);
       if (hMatch) { blocks.push({ type: "h", level: hMatch[1].length, text: hMatch[2].trim() }); i++; continue; }
       if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) { blocks.push({ type: "hr" }); i++; continue; }
@@ -2362,7 +2396,7 @@
     var ids = collectDescendantFolderIds(id);
     var removed = state.docs.filter(function (d) { return ids.indexOf(d.folderId) !== -1; }).map(function (d) { return d.id; });
     if (removed.indexOf(state.activeId) !== -1) { stopSpeech(); state.activeId = null; }
-    state.docs.forEach(function (d) { if (d.pdfKey && ids.indexOf(d.folderId) !== -1) pdfDbDel(d.pdfKey); });
+    state.docs.forEach(function (d) { if (ids.indexOf(d.folderId) !== -1) [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(pdfDbDel); });
     state.docs = state.docs.filter(function (d) { return ids.indexOf(d.folderId) === -1; });
     state.folders = state.folders.filter(function (f) { return ids.indexOf(f.id) === -1; });
     if (ids.indexOf(state.currentFolderId) !== -1) state.currentFolderId = folder.parentId || null;
@@ -2486,8 +2520,54 @@
       }
       tableBody.appendChild(it.kind === "folder" ? buildFolderRow(it.obj) : buildDocRow(it.obj));
     });
+    syncRowSelectionStyles();
     updateBulkBar();
   }
+
+  function syncRowSelectionStyles() {
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) {
+      var id = row.dataset.id, selected = !!state.selected[id];
+      row.classList.toggle("drag-selected", selected);
+      var cb = row.querySelector('input[type="checkbox"]'); if (cb) cb.checked = selected;
+    });
+  }
+  var selectionDrag = null;
+  var suppressSelectionClick = false;
+  tableBody.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0 || e.target.closest("button:not(.row-name),input,.row-menu")) return;
+    var bodyRect = tableBody.getBoundingClientRect();
+    selectionDrag = { x: e.clientX, y: e.clientY, rect: bodyRect, additive: e.ctrlKey || e.metaKey, moved: false, pointerId: e.pointerId };
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = false; });
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    if (Math.abs(e.clientX - selectionDrag.x) + Math.abs(e.clientY - selectionDrag.y) < 5 && !selectionDrag.moved) return;
+    if (!selectionDrag.moved) {
+      selectionDrag.moved = true;
+      if (!selectionDrag.additive) state.selected = {};
+      selectionDrag.box = document.createElement("div"); selectionDrag.box.className = "selection-box"; tableBody.appendChild(selectionDrag.box);
+    }
+    var left = Math.min(selectionDrag.x, e.clientX), top = Math.min(selectionDrag.y, e.clientY);
+    var right = Math.max(selectionDrag.x, e.clientX), bottom = Math.max(selectionDrag.y, e.clientY), br = selectionDrag.rect;
+    selectionDrag.box.style.left = (left - br.left + tableBody.scrollLeft) + "px";
+    selectionDrag.box.style.top = (top - br.top + tableBody.scrollTop) + "px";
+    selectionDrag.box.style.width = (right - left) + "px"; selectionDrag.box.style.height = (bottom - top) + "px";
+    var area = { left: left, top: top, right: right, bottom: bottom };
+    Array.prototype.forEach.call(tableBody.querySelectorAll('.row[data-kind="doc"]'), function (row) {
+      var r = row.getBoundingClientRect(), hit = r.right >= area.left && r.left <= area.right && r.bottom >= area.top && r.top <= area.bottom;
+      if (hit) state.selected[row.dataset.id] = true;
+      else if (!selectionDrag.additive) delete state.selected[row.dataset.id];
+    });
+    syncRowSelectionStyles(); updateBulkBar();
+  });
+  document.addEventListener("pointerup", function (e) {
+    if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    if (selectionDrag.box) selectionDrag.box.remove();
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = true; });
+    if (selectionDrag.moved) { suppressSelectionClick = true; setTimeout(function () { suppressSelectionClick = false; }, 0); }
+    selectionDrag = null;
+  });
+  tableBody.addEventListener("click", function (e) { if (suppressSelectionClick) { e.preventDefault(); e.stopPropagation(); } }, true);
 
   function buildFolderRow(folder) {
     var count = state.docs.filter(function (d) { return d.folderId === folder.id; }).length +
@@ -2555,7 +2635,8 @@
   var dragData = null;
   function attachDragHandlers(row, id, kind) {
     row.addEventListener("dragstart", function (e) {
-      dragData = { id: id, kind: kind };
+      var selected = Object.keys(state.selected).filter(function (key) { return state.selected[key]; });
+      dragData = selected.indexOf(id) !== -1 ? { ids: selected, id: id, kind: kind } : { ids: [id], id: id, kind: kind };
       row.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
       try { e.dataTransfer.setData("text/plain", id); } catch (err) {}
@@ -2571,7 +2652,8 @@
     row.addEventListener("drop", function (e) {
       e.preventDefault(); row.classList.remove("drag-over");
       if (!dragData || dragData.id === targetFolderId) return;
-      moveItem(dragData.id, dragData.kind, targetFolderId);
+      if (dragData.ids && dragData.ids.length > 1) moveSelectedItems(dragData.ids, targetFolderId);
+      else moveItem(dragData.id, dragData.kind, targetFolderId);
       dragData = null;
     });
   }
@@ -2586,10 +2668,19 @@
     }
     saveLibrary(); renderLibrary();
   }
+  function moveSelectedItems(ids, targetFolderId) {
+    var movingFolders = ids.filter(function (id) { return state.folders.some(function (f) { return f.id === id; }); });
+    if (movingFolders.some(function (id) { return collectDescendantFolderIds(id).indexOf(targetFolderId) !== -1; })) { toast("No se puede mover una carpeta dentro de sí misma."); return; }
+    ids.forEach(function (id) {
+      var doc = state.docs.find(function (d) { return d.id === id; }); if (doc) { doc.folderId = targetFolderId; return; }
+      var folder = state.folders.find(function (f) { return f.id === id; }); if (folder) folder.parentId = targetFolderId;
+    });
+    state.selected = {}; saveLibrary(); renderLibrary();
+  }
 
   function deleteDoc(id, skipRender) {
     stopSpeech();
-    state.docs.forEach(function (d) { if (d.id === id && d.pdfKey) pdfDbDel(d.pdfKey); });
+    state.docs.forEach(function (d) { if (d.id === id) [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(pdfDbDel); });
     state.docs = state.docs.filter(function (d) { return d.id !== id; });
     saveLibrary();
     if (state.activeId === id) state.activeId = null;
@@ -2728,7 +2819,7 @@
     }
     state.sentences = [];
 
-    var canUseCache = doc.renderedHtml && (doc.renderedHtmlSource === textHash(doc.text) || doc.renderedHtmlSource === doc.text);
+    var canUseCache = doc.renderedHtml && doc.text.indexOf("folio-image:") === -1 && (doc.renderedHtmlSource === textHash(doc.text) || doc.renderedHtmlSource === doc.text);
 
     if (canUseCache) {
       textEl.innerHTML = doc.renderedHtml;
@@ -2767,7 +2858,11 @@
     }
 
     parseMarkdownBlocks(doc.text).forEach(function (block) {
-      if (block.type === "h") {
+      if (block.type === "image") {
+        var image = document.createElement("img"); image.className = "folio-image-preview inline-doc-image"; image.alt = block.alt || "Imagen del documento";
+        textEl.appendChild(image);
+        getPdfBytes(block.key).then(function (buf) { if (!buf || !image.isConnected) return; image.src = URL.createObjectURL(new Blob([buf], { type: ((doc.inlineImages || []).find(function (it) { return it.key === block.key; }) || {}).mimeType || "image/png" })); });
+      } else if (block.type === "h") {
         var h = document.createElement("h" + Math.min(block.level, 3));
         splitSentencesRaw(block.text).forEach(function (c) { h.appendChild(makeSentenceSpan(c)); });
         textEl.appendChild(h);
@@ -3151,6 +3246,8 @@
   /* ---------- modal ---------- */
   var modalVeil = document.getElementById("modalVeil");
   var editingDocId = null;
+  var pendingEditorImages = [];
+  var editorImageRefs = [];
   function openModal() {
     editingDocId = null;
     modalVeil.classList.add("open");
@@ -3159,6 +3256,7 @@
     document.getElementById("pasteTitle").value = ""; document.getElementById("pasteText").value = "";
     document.getElementById("fileStatus").textContent = ""; document.getElementById("fileStatus").className = "status-line";
     document.getElementById("fileInput").value = ""; setTab("paste");
+    pendingEditorImages = []; editorImageRefs = []; document.getElementById("inlineImageInput").value = "";
   }
   function openEditModal(doc) {
     editingDocId = doc.id;
@@ -3167,6 +3265,7 @@
     document.getElementById("pasteSave").textContent = "Guardar cambios";
     document.getElementById("pasteTitle").value = doc.title;
     document.getElementById("pasteText").value = doc.text;
+    pendingEditorImages = []; editorImageRefs = (doc.inlineImages || []).slice(); document.getElementById("inlineImageInput").value = "";
     setTab("paste");
   }
   function closeModal() { modalVeil.classList.remove("open"); editingDocId = null; }
@@ -3183,16 +3282,34 @@
     var title = document.getElementById("pasteTitle").value.trim();
     var text = document.getElementById("pasteText").value.trim();
     if (!text) { document.getElementById("pasteText").focus(); return; }
+    var saveWithImages = Promise.resolve();
+    pendingEditorImages.forEach(function (entry) {
+      saveWithImages = saveWithImages.then(function () { return entry.file.arrayBuffer().then(function (buf) { return pdfDbPut(entry.key, buf).then(function () { editorImageRefs.push({ key: entry.key, name: entry.file.name, mimeType: entry.file.type || "image/png" }); }); }); });
+    });
+    saveWithImages.then(function () {
+    var usedKeys = {}; (text.match(/!\[[^\]]*\]\(folio-image:([^)]+)\)/g) || []).forEach(function (m) { var x = m.match(/folio-image:([^)]+)/); if (x) usedKeys[x[1]] = true; });
+    var refs = editorImageRefs.filter(function (it) { return usedKeys[it.key]; });
     if (editingDocId) {
       var doc = state.docs.find(function (d) { return d.id === editingDocId; });
       if (doc) {
-        doc.title = title || text.slice(0, 40); doc.text = text; doc.lastIndex = 0;
+        doc.title = title || text.slice(0, 40); doc.text = text; doc.inlineImages = refs; doc.lastIndex = 0;
         saveLibrary(); renderSideList();
         if (state.activeId === doc.id) renderReader();
       }
       closeModal(); return;
     }
-    addDocument(title || text.slice(0, 40), text); closeModal();
+    addDocument(title || text.slice(0, 40), text, { inlineImages: refs }); closeModal();
+    });
+  });
+  document.getElementById("insertInlineImageBtn").addEventListener("click", function () { document.getElementById("inlineImageInput").click(); });
+  document.getElementById("inlineImageInput").addEventListener("change", function (e) {
+    var files = Array.prototype.slice.call(e.target.files || []), textarea = document.getElementById("pasteText");
+    files.forEach(function (file) {
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type) || file.size > 10 * 1024 * 1024) { toast("Usa imágenes PNG, JPG, WebP o GIF de hasta 10 MB."); return; }
+      var key = "img_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), marker = "\n![" + file.name.replace(/[\]\n]/g, "") + "](folio-image:" + key + ")\n";
+      var start = textarea.selectionStart, end = textarea.selectionEnd; textarea.setRangeText(marker, start, end, "end"); pendingEditorImages.push({ key: key, file: file });
+    });
+    e.target.value = "";
   });
 
   /* ---------- AI side panel (resumen / cuestionario / preguntar) ---------- */
@@ -4467,7 +4584,7 @@
     setFileStatus("Leyendo la carpeta…");
     importFolderPackage(file).then(function (r) {
       setFileStatus("Listo.", "ok"); closeModal();
-      toast("Carpeta «" + r.nombre + "» importada: " + r.docs + (r.docs === 1 ? " documento" : " documentos") + (r.tareas ? " y " + r.tareas + " elementos de IA" : "") + ".");
+      toast("Carpeta «" + r.nombre + "» importada: " + r.docs + (r.docs === 1 ? " documento" : " documentos") + (r.tareas ? " y " + r.tareas + " elementos de IA" : "") + (r.ocrPendientes ? ". " + r.ocrPendientes + " imágenes quedaron guardadas, pero sin texto reconocido." : "."));
     }).catch(function (e) { setFileStatus((e && e.message) || "No se pudo importar ese archivo.", "error"); });
   }
   function handleFile(file) {

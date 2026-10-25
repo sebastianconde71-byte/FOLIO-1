@@ -14,8 +14,12 @@ ZIP
 - Para ZIP educativos, Folio importa hasta 100 archivos compatibles: Markdown, texto, HTML e imágenes.
 - Markdown y texto se guardan como documentos. En HTML se toma el texto visible, sin ejecutar scripts ni insertar código HTML.
 - Las imágenes del ZIP se muestran individualmente y se procesan para lectura con Gemini.
-- Los archivos .folio y los ZIP que contienen carpeta.json conservan su importación normal de carpetas Folio.
+- Los archivos .folio y los ZIP que contienen carpeta.json se importan como carpetas de Folio; las imágenes sin transcripción se reconocen durante la importación.
 - Los demás formatos dentro del ZIP se ignoran.
+
+NUEVAS FUNCIONES
+- Selecciona varios documentos arrastrando el cursor sobre sus filas. Después arrastra cualquiera de los seleccionados a la carpeta destino; también puedes usar las casillas.
+- En «Editar documento», usa «Insertar imagen» para colocar PNG, JPG, WebP o GIF en la posición del cursor. Se conserva dentro del texto, se muestra al leer y se incluye en la sincronización y en los respaldos .folio. Máximo 10 MB por imagen.
 
 INSTALACIÓN
 1. Descomprime el ZIP.
