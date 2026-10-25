@@ -2533,22 +2533,38 @@
   }
   var selectionDrag = null;
   var suppressSelectionClick = false;
+  var selectionAutoScroll = null;
   tableBody.addEventListener("pointerdown", function (e) {
     if (e.button !== 0 || e.target.closest("button:not(.row-name),input,.row-menu")) return;
+    var startingRow = e.target.closest(".row");
+    // Una fila ya seleccionada debe conservar el arrastre nativo para mover el grupo.
+    if (startingRow && state.selected[startingRow.dataset.id]) return;
     var bodyRect = tableBody.getBoundingClientRect();
-    selectionDrag = { x: e.clientX, y: e.clientY, rect: bodyRect, additive: e.ctrlKey || e.metaKey, moved: false, pointerId: e.pointerId };
+    selectionDrag = { x: e.clientX, y: e.clientY, clientX: e.clientX, clientY: e.clientY, rect: bodyRect, additive: e.ctrlKey || e.metaKey, moved: false, pointerId: e.pointerId };
     Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = false; });
   });
   document.addEventListener("pointermove", function (e) {
     if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    selectionDrag.clientX = e.clientX; selectionDrag.clientY = e.clientY;
     if (Math.abs(e.clientX - selectionDrag.x) + Math.abs(e.clientY - selectionDrag.y) < 5 && !selectionDrag.moved) return;
     if (!selectionDrag.moved) {
       selectionDrag.moved = true;
       if (!selectionDrag.additive) state.selected = {};
       selectionDrag.box = document.createElement("div"); selectionDrag.box.className = "selection-box"; tableBody.appendChild(selectionDrag.box);
     }
-    var left = Math.min(selectionDrag.x, e.clientX), top = Math.min(selectionDrag.y, e.clientY);
-    var right = Math.max(selectionDrag.x, e.clientX), bottom = Math.max(selectionDrag.y, e.clientY), br = selectionDrag.rect;
+    updateSelectionDrag();
+    if (!selectionAutoScroll) selectionAutoScroll = setInterval(function () {
+      if (!selectionDrag || !selectionDrag.moved) return;
+      var wrap = tableBody.parentElement, wr = wrap.getBoundingClientRect(), y = selectionDrag.clientY, edge = 48, delta = 0;
+      if (y < wr.top + edge && y >= wr.top) delta = -Math.max(5, Math.round((wr.top + edge - y) / 3));
+      else if (y > wr.bottom - edge && y <= wr.bottom) delta = Math.max(5, Math.round((y - (wr.bottom - edge)) / 3));
+      if (delta) { wrap.scrollTop += delta; updateSelectionDrag(); }
+    }, 16);
+  });
+  function updateSelectionDrag() {
+    if (!selectionDrag || !selectionDrag.moved) return;
+    var left = Math.min(selectionDrag.x, selectionDrag.clientX), top = Math.min(selectionDrag.y, selectionDrag.clientY);
+    var right = Math.max(selectionDrag.x, selectionDrag.clientX), bottom = Math.max(selectionDrag.y, selectionDrag.clientY), br = tableBody.getBoundingClientRect();
     selectionDrag.box.style.left = (left - br.left + tableBody.scrollLeft) + "px";
     selectionDrag.box.style.top = (top - br.top + tableBody.scrollTop) + "px";
     selectionDrag.box.style.width = (right - left) + "px"; selectionDrag.box.style.height = (bottom - top) + "px";
@@ -2559,9 +2575,10 @@
       else if (!selectionDrag.additive) delete state.selected[row.dataset.id];
     });
     syncRowSelectionStyles(); updateBulkBar();
-  });
+  }
   document.addEventListener("pointerup", function (e) {
     if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    if (selectionAutoScroll) { clearInterval(selectionAutoScroll); selectionAutoScroll = null; }
     if (selectionDrag.box) selectionDrag.box.remove();
     Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = true; });
     if (selectionDrag.moved) { suppressSelectionClick = true; setTimeout(function () { suppressSelectionClick = false; }, 0); }
