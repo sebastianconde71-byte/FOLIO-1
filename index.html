@@ -1549,7 +1549,8 @@
   /* ---- PDFs ---- */
   function uploadPdf(d, attachmentKey) {
     var key = attachmentKey || d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
-    return pdfDbGet(key).then(function (buf) {
+    /* Recuperar también de la copia local del servidor si IndexedDB ya no tiene el blob. */
+    return getPdfBytes(key).then(function (buf) {
       if (!buf) return "missing-local";
       return CLOUD.client.from("pdf_files").insert({ key: key, size_bytes: buf.byteLength }).then(function (r) {
         if (r.error && String(r.error.code) !== "23505") {
