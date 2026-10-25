@@ -1601,7 +1601,9 @@
       Object.keys(assets).forEach(function (key) {
         if (remote[key + ".pdf"]) { m.pdf[key] = 1; delete m.pdfBad[key]; return; }
         delete m.pdf[key];
-        if (m.pdfBad[key]) pending.push(assets[key]); else jobs.push(assets[key]);
+        /* Reintentar los archivos ausentes aunque hubiera quedado una marca de error antigua. */
+        delete m.pdfBad[key];
+        jobs.push(assets[key]);
       });
       return seqRun(jobs, function (job, n, total) {
         CLOUD.progress = "Reparando archivos " + n + " de " + total + "…"; renderBk();
