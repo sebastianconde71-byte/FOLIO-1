@@ -4,6 +4,8 @@ Sube TODO el contenido de esta carpeta (index.html, sw.js, manifest.webmanifest,
 los iconos y la carpeta libs) a GitHub Pages, Netlify o Cloudflare Pages.
 No cambies los nombres de los archivos.
 
+Folio admite TXT, PDF, imagenes PNG/JPG/WebP/GIF, HTML, Markdown y ZIP de material educativo. En imagenes y ZIP con imagenes, reconoce el texto con Gemini para leerlo en voz alta; la imagen original se conserva visible. Para esa funcion, el navegador necesita una llave de Gemini.
+
 Despues, abre la direccion que te den desde cualquier dispositivo:
  - Android / PC: menu del navegador -> "Instalar app".
  - iPhone / iPad: Safari -> Compartir -> "Anadir a pantalla de inicio".

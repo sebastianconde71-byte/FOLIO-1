@@ -167,6 +167,8 @@
   .back-btn:hover{background:var(--hover); color:var(--text);}
   .reader-scroll{flex:1; overflow-y:auto; padding:40px 32px 120px;}
   .reader-inner{max-width:var(--rt-width,660px); margin:0 auto;}
+  .folio-image-preview{display:block;max-width:100%;max-height:78vh;margin:18px auto 24px;border:1px solid var(--border);border-radius:8px;object-fit:contain;background:#f7f7f9}
+  .reader-inner.image-on #readerText{display:none;}
   .reader-inner.pdf-on{max-width:1000px;}
   .st-card{max-width:460px; max-height:88vh; overflow:auto;}
   .st-sec{border-top:1px solid var(--border); padding:14px 0 4px; margin-top:12px;}
@@ -873,7 +875,7 @@
       <div class="tab-pane" id="fileTab">
         <div class="field">
           <div class="dropzone" id="dropzone">
-            Arrastra un archivo .txt, .pdf o .folio (carpeta compartida) aquí, o
+            Arrastra un archivo TXT, PDF, imagen, HTML, Markdown, ZIP o .folio aquí, o
             <label for="fileInput" style="color:var(--accent); cursor:pointer; font-weight:600;"> elige uno de tu equipo</label>
             <input type="file" id="fileInput">
           </div>
@@ -1076,6 +1078,69 @@
         if (!m || m.formato !== "folio-carpeta" || !Array.isArray(m.carpetas) || !Array.isArray(m.documentos)) throw new Error("Este archivo no es una carpeta de Folio.");
         if (m.version > 1) throw new Error("Este archivo viene de una versión más nueva de Folio. Actualiza Folio.");
         return importManifest(m, zip);
+      });
+    });
+  }
+  function importStudyZip(file) {
+    return loadZip().then(function (JSZip) { return JSZip.loadAsync(file); }).then(function (zip) {
+      var folioManifest = zip.file("carpeta.json");
+      if (folioManifest) return folioManifest.async("string").then(function (txt) {
+        var m; try { m = JSON.parse(txt); } catch (e) { throw new Error("El archivo está dañado."); }
+        if (!m || m.formato !== "folio-carpeta" || !Array.isArray(m.carpetas) || !Array.isArray(m.documentos)) throw new Error("Este ZIP no es una carpeta válida de Folio.");
+        return importManifest(m, zip).then(function (r) { return { docs: r.docs, images: 0, imported: r.docs }; });
+      });
+      var entries = Object.keys(zip.files).filter(function (p) {
+        var f = zip.files[p]; return !f.dir && !/(^|\/)\./.test(p) && /\.(md|txt|html?|png|jpe?g|webp|gif)$/i.test(p);
+      }).slice(0, 100);
+      if (!entries.length) throw new Error("El ZIP no contiene Markdown, texto, HTML o imágenes compatibles.");
+      var docs = entries.filter(function (p) { return /\.(md|txt|html?)$/i.test(p); });
+      var imgs = entries.filter(function (p) { return /\.(png|jpe?g|webp|gif)$/i.test(p); });
+      var imported = 0, chain = Promise.resolve();
+      docs.forEach(function (p) {
+        chain = chain.then(function () { return zip.file(p).async("string"); }).then(function (text) {
+          var base = p.split("/").pop().replace(/\.(md|txt|html?)$/i, "");
+          if (/\.html?$/i.test(p)) {
+            var parsed = new DOMParser().parseFromString(text, "text/html");
+            text = (parsed.body && parsed.body.innerText) || (parsed.body && parsed.body.textContent) || "";
+          }
+          if (text.trim()) { addDocument(base, text); imported++; }
+        });
+      });
+      imgs.forEach(function (p, ix) {
+        chain = chain.then(function () {
+          setFileStatus("Leyendo texto de imagen " + (ix + 1) + " de " + imgs.length + "…");
+          return zip.file(p).async("blob").then(function (blob) {
+            if (blob.size > 15 * 1024 * 1024) throw new Error("La imagen " + p + " supera 15 MB; impórtala por separado o reduce su tamaño.");
+            return addImageDocument(p.split("/").pop().replace(/\.(png|jpe?g|webp|gif)$/i, ""), blob, imageMime(p));
+          }).then(function () { imported++; });
+        });
+      });
+      return chain.then(function () { return { docs: docs.length, images: imgs.length, imported: imported }; });
+    });
+  }
+  function imageMime(name) {
+    var ext = (String(name).match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
+    return ({ jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" })[ext] || "image/png";
+  }
+  function confirmImageOcr() {
+    if (lsGet("folioImageOcrConsent") === "yes") return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      showConfirm("Para leer la imagen, Folio enviará una copia a Google Gemini. El texto reconocido se guardará como texto de lectura y, si iniciaste sesión, se sincronizará con tu biblioteca. ¿Continuar?", function (ok) {
+        if (ok) lsSet("folioImageOcrConsent", "yes");
+        resolve(!!ok);
+      });
+    });
+  }
+  function addImageDocument(title, blob, mime) {
+    mime = mime || "image/png";
+    var source = blob.type === mime ? blob : new Blob([blob], { type: mime });
+    return confirmImageOcr().then(function (ok) { if (!ok) throw { code: "image_consent" }; return geminiImageText(source); }).then(function (text) {
+      var key = "img" + Date.now() + Math.random().toString(36).slice(2, 8);
+      return source.arrayBuffer().then(function (buf) {
+        pdfBackupUpload(key, buf);
+        return pdfDbPut(key, buf).then(function () {
+          addDocument(title, text, { pdfKey: key, viewMode: "text", attachmentType: "image", mimeType: mime });
+        });
       });
     });
   }
@@ -1455,6 +1520,7 @@
           if (String(r.error.code) === "54000" || /espacio/i.test(r.error.message || "")) { m.pdfBad[key] = 1; cloudWarnOnce("quota", "No hay espacio en tu nube para «" + d.title + "». El PDF queda solo en este dispositivo."); return "stop"; }
           throw cloudErr(r.error);
         }
+        /* El bucket existente admite application/pdf; mimeType conserva el formato real en el registro. */
         return CLOUD.client.storage.from("pdfs").upload(me + "/" + key + ".pdf", new Blob([buf], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true }).then(function (u) {
           if (u && u.error) {
             if (/maximum|exceed|size|413/i.test((u.error.message || "") + (u.error.statusCode || ""))) {
@@ -2629,7 +2695,8 @@
       '</div>' +
       '';
     readerInner.innerHTML =
-      '<h1 class="reader-title"></h1><p class="reader-sub"></p><div class="reader-text" id="readerText"></div>';
+      '<h1 class="reader-title"></h1><p class="reader-sub"></p>' + (doc.attachmentType === "image" ? '<img class="folio-image-preview" alt="Imagen adjunta">' : '') + '<div class="reader-text" id="readerText"></div>';
+    readerInner.classList.toggle("image-on", doc.attachmentType === "image");
     readerInner.querySelector(".reader-title").textContent = doc.title;
     readerInner.querySelector(".reader-sub").textContent = wordCount(doc.text) + " palabras · " + estimateMinutes(doc.text) + " min de lectura";
     document.getElementById("railAdd").addEventListener("click", openModal);
@@ -2650,6 +2717,15 @@
     });
 
     var textEl = document.getElementById("readerText");
+    if (doc.attachmentType === "image" && doc.pdfKey) {
+      var imageEl = readerInner.querySelector(".folio-image-preview");
+      pdfDbGet(doc.pdfKey).then(function (buf) {
+        if (!buf || !imageEl || getActiveDoc() !== doc) return;
+        if (imageEl._folioUrl) URL.revokeObjectURL(imageEl._folioUrl);
+        imageEl._folioUrl = URL.createObjectURL(new Blob([buf], { type: doc.mimeType || "image/png" }));
+        imageEl.src = imageEl._folioUrl;
+      });
+    }
     state.sentences = [];
 
     var canUseCache = doc.renderedHtml && (doc.renderedHtmlSource === textHash(doc.text) || doc.renderedHtmlSource === doc.text);
@@ -3419,6 +3495,27 @@
     return (key ? Promise.resolve(key) : askGeminiKey()).then(function (k) {
       if (!k) throw { code: "sin_llave" };
       return gemModels(k).then(function (models) { return gemGenerate(models, k, body); });
+    }).catch(function (e) {
+      if (e && e.code === "bad_key") { lsDel("folioGeminiKey"); lsDel("folioGeminiModels"); }
+      throw (e && e.code) ? e : { code: "error" };
+    });
+  }
+  function geminiImageText(file) {
+    var key = getGeminiKey();
+    return (key ? Promise.resolve(key) : askGeminiKey()).then(function (k) {
+      if (!k) throw { code: "sin_llave" };
+      return file.arrayBuffer().then(function (buf) {
+        var bytes = new Uint8Array(buf), bin = "", step = 0x8000;
+        for (var i = 0; i < bytes.length; i += step) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+        var body = { contents: [{ role: "user", parts: [
+          { text: "Transcribe el texto visible en esta imagen para que pueda leerse en voz alta. Conserva el orden de lectura, encabezados, listas y puntuación. No describas la imagen, no agregues explicaciones ni inventes texto. Devuelve únicamente la transcripción; si no hay texto legible, responde exactamente: SIN_TEXTO_LEGIBLE." },
+          { inlineData: { mimeType: file.type || "image/png", data: btoa(bin) } }
+        ] }] };
+        return gemModels(k).then(function (models) { return gemGenerate(models, k, body); });
+      });
+    }).then(function (text) {
+      if (text.trim() === "SIN_TEXTO_LEGIBLE") throw { code: "no_image_text" };
+      return text.trim();
     }).catch(function (e) {
       if (e && e.code === "bad_key") { lsDel("folioGeminiKey"); lsDel("folioGeminiModels"); }
       throw (e && e.code) ? e : { code: "error" };
@@ -4375,7 +4472,22 @@
   }
   function handleFile(file) {
     if (isFolioName(file.name)) { importFolioFile(file); return; }
-    var name = file.name.replace(/\.(txt|pdf)$/i, "");
+    var name = file.name.replace(/\.(txt|pdf|png|jpe?g|webp|gif|zip)$/i, "");
+    if (/\.(png|jpe?g|webp|gif)$/i.test(file.name) || /^image\//i.test(file.type || "")) {
+      setFileStatus("Reconociendo texto de la imagen…");
+      if (file.size > 15 * 1024 * 1024) { setFileStatus("La imagen supera 15 MB. Reduce su tamaño e inténtalo otra vez.", "error"); return; }
+      addImageDocument(name, file, file.type || imageMime(file.name)).then(function () { setFileStatus("Listo.", "ok"); closeModal(); })
+        .catch(function (e) { setFileStatus(e && e.code === "image_consent" ? "Importación cancelada." : (e && e.code === "sin_llave" ? "Para leer imágenes, configura una llave de Gemini en este dispositivo." : (e && e.code === "no_image_text" ? "No encontramos texto legible en esta imagen." : "No se pudo leer el texto de la imagen. Revisa tu conexión y la llave de Gemini.")), "error"); });
+      return;
+    }
+    if (/\.html?$/i.test(file.name) || file.type === "text/html") {
+      file.text().then(function (raw) {
+        var parsed = new DOMParser().parseFromString(raw, "text/html"), text = (parsed.body && parsed.body.innerText) || (parsed.body && parsed.body.textContent) || "";
+        if (!text.trim()) throw new Error("No encontramos texto en el HTML.");
+        addDocument(name, text); setFileStatus("Listo.", "ok"); closeModal();
+      }).catch(function (e) { setFileStatus(e.message || "No se pudo leer el HTML.", "error"); });
+      return;
+    }
     if (/\.txt$/i.test(file.name) || file.type === "text/plain") {
       setFileStatus("Leyendo archivo…");
       var reader = new FileReader();
@@ -4399,8 +4511,11 @@
       return;
     }
     isZipFile(file).then(function (zip) {
-      if (zip) importFolioFile(file);
-      else setFileStatus("Formato no compatible. Usa un archivo .txt, .pdf o .folio (carpeta de Folio).", "error");
+      if (!zip) { setFileStatus("Formato no compatible. Usa TXT, PDF, imágenes, ZIP o una carpeta .folio.", "error"); return; }
+      if (/\.folio$/i.test(file.name)) { importFolioFile(file); return; }
+      setFileStatus("Importando documentos e imágenes del ZIP…");
+      importStudyZip(file).then(function (r) { setFileStatus("Listo.", "ok"); closeModal(); toast("ZIP importado: " + r.docs + " textos y " + r.images + " imágenes."); })
+        .catch(function (e) { setFileStatus((e && e.message) || "No se pudo importar el ZIP.", "error"); });
     });
   }
   /* ---------- PDF: texto con párrafos + visor fiel con capa de texto ---------- */

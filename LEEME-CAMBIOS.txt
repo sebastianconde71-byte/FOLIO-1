@@ -1,0 +1,26 @@
+CAMBIOS DE ESTA COPIA DE FOLIO
+==============================
+
+La app ahora admite agregar TXT, PDF, Markdown (.md), HTML (.html/.htm), imágenes PNG/JPG/JPEG/WebP/GIF y ZIP con esos tipos de archivo.
+
+IMÁGENES
+- Folio conserva y muestra la imagen original.
+- En la primera importación se pide confirmar el envío a Google Gemini para reconocer el texto.
+- El texto reconocido se usa para la narración de Folio; no se muestra como transcripción mientras se ve la imagen.
+- La lectura necesita conexión a internet y una llave de Gemini guardada en el navegador.
+- Si iniciaste sesión en Supabase, la imagen y el contenido del documento se sincronizan como los adjuntos existentes.
+
+ZIP
+- Para ZIP educativos, Folio importa hasta 100 archivos compatibles: Markdown, texto, HTML e imágenes.
+- Markdown y texto se guardan como documentos. En HTML se toma el texto visible, sin ejecutar scripts ni insertar código HTML.
+- Las imágenes del ZIP se muestran individualmente y se procesan para lectura con Gemini.
+- Los archivos .folio y los ZIP que contienen carpeta.json conservan su importación normal de carpetas Folio.
+- Los demás formatos dentro del ZIP se ignoran.
+
+INSTALACIÓN
+1. Descomprime el ZIP.
+2. Sube el contenido de FOLIO-1-main a una rama de prueba o copia local. No reemplaces aún tu versión publicada.
+3. Abre la app y prueba primero con una imagen pequeña con texto y un ZIP de prueba.
+4. Para publicar, usa el mismo repositorio y la configuración de Supabase que ya tienes. El service worker se actualizó para descargar esta versión.
+
+Esta entrega no modifica tu repositorio de GitHub ni tu proyecto Supabase. La conexión con VoiceStudio/Tailscale no se ha añadido ni validado en esta copia.
