@@ -20,6 +20,8 @@ ZIP
 NUEVAS FUNCIONES
 - Selecciona varios documentos arrastrando el cursor sobre sus filas. Después arrastra cualquiera de los seleccionados a la carpeta destino; también puedes usar las casillas.
 - En «Editar documento», usa «Insertar imagen» para colocar PNG, JPG, WebP o GIF en la posición del cursor. Se conserva dentro del texto, se muestra al leer y se incluye en la sincronización y en los respaldos .folio. Máximo 10 MB por imagen.
+- También puedes elegir «Usar imagen de Folio» para insertar una copia de cualquier imagen que ya esté guardada como adjunto o dentro de otro documento.
+- La vista de imágenes intenta cargar el archivo desde el dispositivo, el respaldo local y la nube; en móvil requiere conexión y sincronización con la misma cuenta para descargar adjuntos que no estén guardados localmente.
 
 INSTALACIÓN
 1. Descomprime el ZIP.

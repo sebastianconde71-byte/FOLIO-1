@@ -1,7 +1,7 @@
 /* Folio - uso sin conexion. Guarda la pagina y sus librerias para abrirlas aunque no haya internet o el servidor este apagado.
    Funciona igual en la raiz de un sitio (https://dominio/) y en una subruta (https://usuario.github.io/folio/).
    Si cambias algo dentro de /libs, sube el numero de CACHE para que se vuelva a descargar. */
-const CACHE = "folio-offline-v6";
+const CACHE = "folio-offline-v7";
 const BASE = new URL(self.registration.scope).pathname;                 // "/" o "/folio/"
 const PAGINAS = ["index.html", "folio-voz.html"];
 const PRECACHE = PAGINAS.concat(["manifest.webmanifest", "icon-192.png", "icon-512.png",
