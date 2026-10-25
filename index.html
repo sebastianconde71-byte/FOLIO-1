@@ -1378,7 +1378,21 @@
       Object.keys(items).forEach(function (id) { if (items[id].k === kind && !seen[id]) jobs.push({ kind: kind, id: id, m: items[id], op: "delete" }); });
     });
     var order = { folders: 0, docs: 1, tasks: 2 };
-    jobs.sort(function (a, b) { return (a.op === "delete" ? 3 : order[a.kind]) - (b.op === "delete" ? 3 : order[b.kind]); });
+    function folderDepth(id) {
+      var depth = 0, f = findLocal("folders", id), seen = {};
+      while (f && f.parentId && depth < 100 && !seen[f.id]) {
+        seen[f.id] = 1; depth++; f = findLocal("folders", f.parentId);
+      }
+      return depth;
+    }
+    jobs.sort(function (a, b) {
+      var ak = a.op === "delete" ? 3 : order[a.kind], bk = b.op === "delete" ? 3 : order[b.kind];
+      if (ak !== bk) return ak - bk;
+      // RLS valida parent_id contra una carpeta ya existente en Supabase.
+      // Por eso las carpetas deben subirse de raíz hacia hojas, no en el orden local.
+      if (ak === 0 && a.o && b.o) return folderDepth(a.o.id) - folderDepth(b.o.id);
+      return 0;
+    });
     return seqRun(jobs, function (j, n, total) {
       if (total > 6) { CLOUD.progress = "Sincronizando " + n + " de " + total + "…"; if (n % 3 === 0) renderBk(); }
       return pushJob(j).then(function (result) { if (result === "blocked") stats.blocked++; else stats.pushed++; if (n % 10 === 0) return metaSave(); });
