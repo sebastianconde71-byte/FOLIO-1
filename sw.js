@@ -1,11 +1,11 @@
 /* Folio - uso sin conexion. Guarda la pagina y sus librerias para abrirlas aunque no haya internet o el servidor este apagado.
    Funciona igual en la raiz de un sitio (https://dominio/) y en una subruta (https://usuario.github.io/folio/).
    Si cambias algo dentro de /libs, sube el numero de CACHE para que se vuelva a descargar. */
-const CACHE = "folio-offline-v13-camera-offline-pending";
+const CACHE = "folio-offline-v14-heic-offline";
 const BASE = new URL(self.registration.scope).pathname;                 // "/" o "/folio/"
 const PAGINAS = ["index.html", "folio-voz.html"];
 const PRECACHE = PAGINAS.concat(["manifest.webmanifest", "icon-192.png", "icon-512.png",
-  "libs/pdf.min.js", "libs/pdf.worker.min.js", "libs/jszip.min.js", "libs/supabase.js", "libs/fonts/fonts.css", "config.js"]).map(function (u) { return BASE + u; });
+  "libs/heic2any.min.js", "libs/pdf.min.js", "libs/pdf.worker.min.js", "libs/jszip.min.js", "libs/supabase.js", "libs/fonts/fonts.css", "config.js"]).map(function (u) { return BASE + u; });
 
 function relativa(p) { return p.indexOf(BASE) === 0 ? p.slice(BASE.length) : p.replace(/^\//, ""); }
 

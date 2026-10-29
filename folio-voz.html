@@ -909,8 +909,8 @@
         <div class="slide-capture-actions">
           <button type="button" class="btn ghost" id="slideCameraBtn">📷 Tomar foto</button>
           <button type="button" class="btn ghost" id="slideFilesBtn">🖼️ Elegir fotos</button>
-          <input type="file" id="slideCameraInput" accept="image/*" capture="environment" hidden>
-          <input type="file" id="slideFilesInput" accept="image/*" multiple hidden>
+          <input type="file" id="slideCameraInput" accept="image/*,.heic,.HEIC,.heif,.HEIF" capture="environment" hidden>
+          <input type="file" id="slideFilesInput" accept="image/*,.heic,.HEIC,.heif,.HEIF" multiple hidden>
         </div>
         <p class="status-line">Las fotos se añaden en el orden elegido. Puedes moverlas antes de guardar. Máximo 40 fotos.</p>
         <div id="slideList" class="slide-list" aria-live="polite"></div>
@@ -3417,7 +3417,40 @@
   var editorImageRefs = [];
   var slidePhotos = [];
   var slideSaving = false;
+  var slideLoading = false;
+  var slideImportQueue = Promise.resolve();
+  var slideImportGeneration = 0;
+  var slideImportToken = 0;
+  var heicConverterPromise = null;
+  function isHeicPhoto(file) {
+    return /\.hei[cf]$/i.test(file.name || "") || /^image\/hei[cf]$/i.test(file.type || "");
+  }
+  function loadHeicConverter() {
+    if (window.heic2any) return Promise.resolve(window.heic2any);
+    if (!heicConverterPromise) heicConverterPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "libs/heic2any.min.js"; // copia local: disponible sin conexión con el service worker
+      script.onload = function () { window.heic2any ? resolve(window.heic2any) : reject(new Error("El conversor HEIC no inició.")); };
+      script.onerror = function () { reject(new Error("No se pudo cargar el conversor HEIC sin conexión. Abre Folio una vez con internet tras actualizarlo.")); };
+      document.head.appendChild(script);
+    }).catch(function (err) { heicConverterPromise = null; throw err; });
+    return heicConverterPromise;
+  }
+  function prepareSlideFile(file) {
+    if (!isHeicPhoto(file)) return Promise.resolve(file);
+    return loadHeicConverter().then(function (convert) {
+      return convert({ blob: file, toType: "image/jpeg", quality: 0.92 });
+    }).then(function (converted) {
+      var jpeg = Array.isArray(converted) ? converted[0] : converted;
+      if (!jpeg || !jpeg.size || jpeg.type !== "image/jpeg") throw new Error("No se pudo convertir esta foto HEIC.");
+      return jpeg;
+    });
+  }
   function clearSlidePhotos() {
+    slideImportGeneration++;
+    slideImportToken++;
+    slideImportQueue = Promise.resolve();
+    slideLoading = false;
     slidePhotos.forEach(function (photo) { URL.revokeObjectURL(photo.url); });
     slidePhotos = [];
     renderSlidePhotos();
@@ -3428,7 +3461,7 @@
     slidePhotos.forEach(function (photo, i) {
       var item = document.createElement("div"); item.className = "slide-item";
       var preview = document.createElement("img"); preview.src = photo.url; preview.alt = "Diapositiva " + (i + 1);
-      var label = document.createElement("span"); label.textContent = (i + 1) + ". " + photo.file.name;
+      var label = document.createElement("span"); label.textContent = (i + 1) + ". " + photo.name;
       item.appendChild(preview); item.appendChild(label);
       [["↑", -1, "Subir"], ["↓", 1, "Bajar"], ["×", 0, "Quitar"]].forEach(function (action) {
         var button = document.createElement("button"); button.type = "button"; button.textContent = action[0];
@@ -3443,15 +3476,35 @@
       });
       list.appendChild(item);
     });
-    document.getElementById("slideSaveBtn").disabled = !slidePhotos.length || slideSaving;
+    document.getElementById("slideSaveBtn").disabled = !slidePhotos.length || slideSaving || slideLoading;
   }
   function addSlidePhotos(files) {
+    var generation = slideImportGeneration, batch = ++slideImportToken;
+    var status = document.getElementById("slideStatus");
+    slideLoading = true; renderSlidePhotos();
     files.forEach(function (file) {
-      if (slidePhotos.length >= 40) { toast("Máximo 40 fotos por cuaderno."); return; }
-      if (!/^image\//.test(file.type) || file.size > 15 * 1024 * 1024) { toast("Usa fotos de hasta 15 MB cada una."); return; }
-      slidePhotos.push({ file: file, url: URL.createObjectURL(file) });
+      slideImportQueue = slideImportQueue.then(function () {
+        if (generation !== slideImportGeneration) return;
+        if (slidePhotos.length >= 40) { toast("Máximo 40 fotos por cuaderno."); return; }
+        if ((!isHeicPhoto(file) && !/^image\//.test(file.type || "")) || file.size > 15 * 1024 * 1024) {
+          toast("Usa fotos HEIC, JPG o PNG de hasta 15 MB cada una."); return;
+        }
+        status.textContent = isHeicPhoto(file) ? "Convirtiendo «" + file.name + "» en este dispositivo…" : "Preparando «" + file.name + "»…";
+        return prepareSlideFile(file).then(function (ready) {
+          if (generation !== slideImportGeneration) return;
+          slidePhotos.push({ file: ready, name: file.name, url: URL.createObjectURL(ready) });
+          renderSlidePhotos();
+        }).catch(function (err) {
+          if (generation === slideImportGeneration) { status.textContent = "No se pudo preparar «" + file.name + "»: " + err.message; toast(status.textContent); }
+        });
+      });
     });
-    renderSlidePhotos();
+    slideImportQueue = slideImportQueue.then(function () {
+      if (generation !== slideImportGeneration || batch !== slideImportToken) return;
+      slideLoading = false;
+      if (status.textContent.indexOf("No se pudo") !== 0) status.textContent = "";
+      renderSlidePhotos();
+    });
   }
   document.getElementById("slideCameraBtn").addEventListener("click", function () { document.getElementById("slideCameraInput").click(); });
   document.getElementById("slideFilesBtn").addEventListener("click", function () { document.getElementById("slideFilesInput").click(); });
