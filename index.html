@@ -912,7 +912,7 @@
           <input type="file" id="slideCameraInput" accept="image/*,.heic,.HEIC,.heif,.HEIF" capture="environment" hidden>
           <input type="file" id="slideFilesInput" accept="image/*,.heic,.HEIC,.heif,.HEIF" multiple hidden>
         </div>
-        <p class="status-line">Las fotos se añaden en el orden elegido. Puedes moverlas antes de guardar. Máximo 40 fotos.</p>
+        <p class="status-line">Las fotos se añaden en el orden elegido. Puedes moverlas antes de guardar. Máximo 70 fotos y 120 MB por cuaderno.</p>
         <div id="slideList" class="slide-list" aria-live="polite"></div>
         <div id="slideStatus" class="status-line"></div>
         <div class="modal-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button type="button" class="btn primary" id="slideSaveBtn" disabled>Guardar cuaderno</button></div>
@@ -3486,7 +3486,7 @@
     files.forEach(function (file) {
       slideImportQueue = slideImportQueue.then(function () {
         if (generation !== slideImportGeneration) return;
-        if (slidePhotos.length >= 40) { toast("Máximo 40 fotos por cuaderno."); return; }
+        if (slidePhotos.length >= 70) { toast("Máximo 70 fotos por cuaderno."); return; }
         if ((!isHeicPhoto(file) && !/^image\//.test(file.type || "")) || file.size > 15 * 1024 * 1024) {
           toast("Usa fotos HEIC, JPG o PNG de hasta 15 MB cada una."); return;
         }
@@ -3547,7 +3547,7 @@
         status.textContent = "Guardando diapositiva " + (i + 1) + " de " + photos.length + "…";
         return compressSlide(photo.file).then(function (blob) {
           total += blob.size;
-          if (total > 60 * 1024 * 1024) throw new Error("El cuaderno supera 60 MB. Guárdalo en dos partes.");
+          if (total > 120 * 1024 * 1024) throw new Error("El cuaderno supera 120 MB después de convertir las fotos. Guárdalo en dos partes.");
           var key = "slide" + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
           return blob.arrayBuffer().then(function (buf) { return pdfDbPut(key, buf).then(function () {
             stored.push(key); refs.push({ key: key, name: "Diapositiva " + (i + 1), mimeType: "image/jpeg" });
