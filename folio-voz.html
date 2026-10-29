@@ -167,6 +167,15 @@
   .back-btn:hover{background:var(--hover); color:var(--text);}
   .reader-scroll{flex:1; overflow-y:auto; padding:40px 32px 120px;}
   .reader-inner{max-width:var(--rt-width,660px); margin:0 auto;}
+  .folio-image-preview{display:block;max-width:100%;max-height:78vh;margin:18px auto 24px;border:1px solid var(--border);border-radius:8px;object-fit:contain;background:#f7f7f9}
+  .folio-image-wrap{width:100%;min-width:0;text-align:center}
+  .folio-image-status{font-size:13px;color:var(--text-soft);padding:14px;text-align:center}
+  .folio-image-status button{margin-left:8px;color:var(--accent);text-decoration:underline;font-weight:600}
+  @media (max-width:640px){.reader-scroll{padding:20px 14px 110px}.folio-image-preview{width:100%;max-width:100%;max-height:none;height:auto;margin:12px auto 20px;object-fit:contain}.folio-image-wrap{overflow:visible}}
+  .reader-inner.image-on #readerText{display:none;}
+  #tableBody{position:relative;user-select:none;}
+  .row.drag-selected{background:rgba(91,61,245,.11);outline:1px solid rgba(91,61,245,.28);}
+  .selection-box{position:absolute;z-index:50;pointer-events:none;border:1px solid var(--accent);background:rgba(91,61,245,.12);border-radius:2px;}
   .reader-inner.pdf-on{max-width:1000px;}
   .st-card{max-width:460px; max-height:88vh; overflow:auto;}
   .st-sec{border-top:1px solid var(--border); padding:14px 0 4px; margin-top:12px;}
@@ -378,6 +387,17 @@
   .dropzone{border:1.5px dashed var(--border); border-radius:var(--radius); padding:28px 16px; text-align:center; color:var(--text-soft); font-size:13.5px; line-height:1.6;}
   .dropzone.hover{border-color:var(--accent); background:var(--accent-soft);}
   .dropzone input[type=file]{display:none;}
+  .inline-image-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:8px;}
+  .inline-image-tools .status-line{font-size:11px;}
+  .inline-image-library{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;}
+  .inline-image-library[hidden]{display:none!important;}
+  .inline-image-library select{flex:1;min-width:180px;max-width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px;color:var(--text);font-size:13px;}
+  .slide-capture-actions{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .slide-list{display:grid;gap:8px;max-height:45vh;overflow:auto}
+  .slide-item{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:10px;padding:7px;background:var(--surface)}
+  .slide-item img{width:74px;height:58px;object-fit:contain;background:#fff;border-radius:5px}
+  .slide-item span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .slide-item button{padding:7px;font-size:15px}
   .status-line{font-size:12.5px; margin-top:10px; min-height:16px;}
   .status-line.error{color:var(--danger);}
   .status-line.ok{color:var(--moss);}
@@ -855,6 +875,7 @@
       <div class="tabs">
         <button class="tab-btn active" data-tab="paste">Pegar texto</button>
         <button class="tab-btn" data-tab="file">Subir archivo</button>
+        <button class="tab-btn" data-tab="slides">Fotografiar diapositivas</button>
       </div>
       <div class="tab-pane active" id="pasteTab">
         <div class="field">
@@ -864,6 +885,8 @@
         <div class="field">
           <label class="field-label" for="pasteText">Texto</label>
           <textarea id="pasteText" placeholder="Pega aquí el texto que quieres escuchar…"></textarea>
+          <div class="inline-image-tools"><button type="button" class="btn ghost" id="insertInlineImageBtn">🖼️ Subir imagen</button><input type="file" id="inlineImageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden><button type="button" class="btn ghost" id="chooseLibraryImageBtn">📚 Usar imagen de Folio</button><span id="inlineImageHint" class="status-line">También puedes insertar una imagen que ya esté en tu biblioteca.</span></div>
+          <div class="inline-image-library" id="inlineImageLibrary" hidden><select id="libraryImageSelect" aria-label="Imágenes guardadas en Folio"><option value="">Selecciona una imagen de Folio…</option></select><button type="button" class="btn primary" id="insertLibraryImageBtn" disabled>Insertar en el texto</button></div>
         </div>
         <div class="modal-actions">
           <button class="btn ghost" data-close>Cancelar</button>
@@ -873,13 +896,26 @@
       <div class="tab-pane" id="fileTab">
         <div class="field">
           <div class="dropzone" id="dropzone">
-            Arrastra un archivo .txt, .pdf o .folio (carpeta compartida) aquí, o
+            Arrastra un archivo TXT, PDF, imagen, HTML, Markdown, ZIP o .folio aquí, o
             <label for="fileInput" style="color:var(--accent); cursor:pointer; font-weight:600;"> elige uno de tu equipo</label>
             <input type="file" id="fileInput">
           </div>
           <div class="status-line" id="fileStatus"></div>
         </div>
         <div class="modal-actions"><button class="btn ghost" data-close>Cancelar</button></div>
+      </div>
+      <div class="tab-pane" id="slidesTab">
+        <div class="field"><label class="field-label" for="slideTitle">Título del cuaderno</label><input type="text" id="slideTitle" placeholder="Diapositivas de la clase"></div>
+        <div class="slide-capture-actions">
+          <button type="button" class="btn ghost" id="slideCameraBtn">📷 Tomar foto</button>
+          <button type="button" class="btn ghost" id="slideFilesBtn">🖼️ Elegir fotos</button>
+          <input type="file" id="slideCameraInput" accept="image/*" capture="environment" hidden>
+          <input type="file" id="slideFilesInput" accept="image/*" multiple hidden>
+        </div>
+        <p class="status-line">Las fotos se añaden en el orden elegido. Puedes moverlas antes de guardar. Máximo 40 fotos.</p>
+        <div id="slideList" class="slide-list" aria-live="polite"></div>
+        <div id="slideStatus" class="status-line"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button type="button" class="btn primary" id="slideSaveBtn" disabled>Guardar cuaderno</button></div>
       </div>
     </div>
   </div>
@@ -958,7 +994,7 @@
     return pdfDbGet(key).then(function (buf) {
       if (buf) return buf;
       return fetch("backup/pdf/" + key).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).catch(function () { return null; })
-        .then(function (b) { return b || cloudGetPdf(state.docs.filter(function (d) { return d.pdfKey === key; })[0]); });
+        .then(function (b) { return b || cloudGetPdf(state.docs.filter(function (d) { return d.pdfKey === key || (d.inlineImages || []).some(function (x) { return x.key === key; }); })[0], key); });
     }).catch(function () { return null; });
   }
   function downloadBlob(blob, filename) {
@@ -977,8 +1013,8 @@
       var tasks = JSON.parse(JSON.stringify(state.tasks.filter(function (t) { return docIds.indexOf(t.docId) !== -1; })));
       var zip = new JSZip(), jobs = [];
       docs.forEach(function (d) {
-        if (!d.pdfKey) return;
-        jobs.push(getPdfBytes(d.pdfKey).then(function (buf) { if (buf) zip.file("pdfs/" + d.pdfKey + ".pdf", buf); else { delete d.pdfKey; delete d.viewMode; } }));
+        var keys = [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean);
+        keys.forEach(function (key) { jobs.push(getPdfBytes(key).then(function (buf) { if (buf) zip.file("pdfs/" + key + ".pdf", buf); else if (key === d.pdfKey) { delete d.pdfKey; delete d.viewMode; } })); });
       });
       return Promise.all(jobs).then(function () {
         zip.file("carpeta.json", JSON.stringify({ formato: "folio-carpeta", version: 1, creado: Date.now(), raiz: folder.id, carpetas: folders, documentos: docs, tareas: tasks }));
@@ -1032,23 +1068,44 @@
       return { id: fmap[f.id], name: name, parentId: isRoot ? parent : (fmap[f.parentId] || fmap[m.raiz]),
         color: /^#[0-9a-fA-F]{6}$/.test(f.color || "") ? f.color : undefined, createdAt: Date.now() };
     });
-    var newDocs = [], chain = Promise.resolve();
+    var newDocs = [], chain = Promise.resolve(), ocrPendientes = 0;
+    var imagesNeedOcr = (m.documentos || []).some(function (x) { return x && x.attachmentType === "image" && !String(x.text || "").trim(); });
+    if (imagesNeedOcr) chain = confirmImageOcr().then(function (ok) { if (!ok) throw { code: "image_consent" }; });
     m.documentos.forEach(function (d0) {
       if (!d0 || typeof d0.text !== "string" || typeof d0.id !== "string") return;
-      var d = cleanData(d0), oldKey = d.pdfKey;
+      var d = cleanData(d0), oldKey = d.pdfKey, oldInlineImages = (d.inlineImages || []).slice();
       d.id = rid("d"); dmap[d0.id] = d.id;
       d.folderId = fmap[d0.folderId] || fmap[m.raiz];
       d.title = String(d.title || "Documento").slice(0, 200);
       if (!m.completa) { d.lastIndex = 0; d.createdAt = Date.now(); }
       delete d.pdfKey;
+      delete d.inlineImages;
       if (d.renderedHtml) { d.renderedHtml = sanitizeHtml(d.renderedHtml); d.renderedHtmlSource = textHash(d.text); } else { delete d.renderedHtml; delete d.renderedHtmlSource; }
       if (oldKey && /^[A-Za-z0-9_-]{1,80}$/.test(oldKey) && zip.file("pdfs/" + oldKey + ".pdf")) {
         chain = chain.then(function () { return zip.file("pdfs/" + oldKey + ".pdf").async("arraybuffer"); }).then(function (buf) {
           var nk = "pdf" + Date.now() + Math.random().toString(36).slice(2, 7);
           pdfBackupUpload(nk, buf.slice(0));
-          return pdfDbPut(nk, buf).then(function () { d.pdfKey = nk; });
+          return pdfDbPut(nk, buf).then(function () {
+            d.pdfKey = nk;
+            if (d.attachmentType === "image" && !String(d.text || "").trim()) {
+              if (buf.byteLength > 15 * 1024 * 1024) throw new Error("Una imagen del paquete supera 15 MB y no se puede reconocer con Gemini.");
+              if (typeof setFileStatus === "function") setFileStatus("Reconociendo texto de «" + d.title + "»…");
+              return geminiImageText(new Blob([buf], { type: d.mimeType || "image/png" })).then(function (text) { d.text = text; }, function () { ocrPendientes++; });
+            }
+          });
         });
       } else delete d.viewMode;
+      oldInlineImages.forEach(function (imageRef) {
+        var imageKey = imageRef && imageRef.key;
+        if (!imageKey || !/^[A-Za-z0-9_-]{1,100}$/.test(imageKey) || !zip.file("pdfs/" + imageKey + ".pdf")) return;
+        chain = chain.then(function () { return zip.file("pdfs/" + imageKey + ".pdf").async("arraybuffer"); }).then(function (buf) {
+          var newKey = "img" + Date.now() + Math.random().toString(36).slice(2, 7);
+          d.text = d.text.split("folio-image:" + imageKey).join("folio-image:" + newKey);
+          if (!d.inlineImages) d.inlineImages = [];
+          d.inlineImages.push({ key: newKey, name: String(imageRef.name || "imagen"), mimeType: String(imageRef.mimeType || "image/png") });
+          pdfBackupUpload(newKey, buf.slice(0)); return pdfDbPut(newKey, buf);
+        });
+      });
       newDocs.push(d);
     });
     var KINDS = { summary: 1, quiz: 1, cards: 1, chat: 1 }, newTasks = [];
@@ -1064,7 +1121,7 @@
       newTasks.forEach(function (t) { state.tasks.push(t); });
       state.tasks.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
       saveLibrary(); renderLibrary(); renderSideList();
-      return { nombre: rootName, docs: newDocs.length, tareas: newTasks.length };
+      return { nombre: rootName, docs: newDocs.length, tareas: newTasks.length, ocrPendientes: ocrPendientes };
     });
   }
   function importFolderPackage(file) {
@@ -1076,6 +1133,70 @@
         if (!m || m.formato !== "folio-carpeta" || !Array.isArray(m.carpetas) || !Array.isArray(m.documentos)) throw new Error("Este archivo no es una carpeta de Folio.");
         if (m.version > 1) throw new Error("Este archivo viene de una versión más nueva de Folio. Actualiza Folio.");
         return importManifest(m, zip);
+      });
+    });
+  }
+  function importStudyZip(file) {
+    return loadZip().then(function (JSZip) { return JSZip.loadAsync(file); }).then(function (zip) {
+      var folioManifest = zip.file("carpeta.json");
+      if (folioManifest) return folioManifest.async("string").then(function (txt) {
+        var m; try { m = JSON.parse(txt); } catch (e) { throw new Error("El archivo está dañado."); }
+        if (!m || m.formato !== "folio-carpeta" || !Array.isArray(m.carpetas) || !Array.isArray(m.documentos)) throw new Error("Este ZIP no es una carpeta válida de Folio.");
+        var imageCount = (m.documentos || []).filter(function (d) { return d && d.attachmentType === "image"; }).length;
+        return importManifest(m, zip).then(function (r) { return { docs: r.docs - imageCount, images: imageCount, imported: r.docs, ocrPendientes: r.ocrPendientes || 0 }; });
+      });
+      var entries = Object.keys(zip.files).filter(function (p) {
+        var f = zip.files[p]; return !f.dir && !/(^|\/)\./.test(p) && /\.(md|txt|html?|png|jpe?g|webp|gif)$/i.test(p);
+      }).slice(0, 100);
+      if (!entries.length) throw new Error("El ZIP no contiene Markdown, texto, HTML o imágenes compatibles.");
+      var docs = entries.filter(function (p) { return /\.(md|txt|html?)$/i.test(p); });
+      var imgs = entries.filter(function (p) { return /\.(png|jpe?g|webp|gif)$/i.test(p); });
+      var imported = 0, chain = Promise.resolve();
+      docs.forEach(function (p) {
+        chain = chain.then(function () { return zip.file(p).async("string"); }).then(function (text) {
+          var base = p.split("/").pop().replace(/\.(md|txt|html?)$/i, "");
+          if (/\.html?$/i.test(p)) {
+            var parsed = new DOMParser().parseFromString(text, "text/html");
+            text = (parsed.body && parsed.body.innerText) || (parsed.body && parsed.body.textContent) || "";
+          }
+          if (text.trim()) { addDocument(base, text); imported++; }
+        });
+      });
+      imgs.forEach(function (p, ix) {
+        chain = chain.then(function () {
+          setFileStatus("Leyendo texto de imagen " + (ix + 1) + " de " + imgs.length + "…");
+          return zip.file(p).async("blob").then(function (blob) {
+            if (blob.size > 15 * 1024 * 1024) throw new Error("La imagen " + p + " supera 15 MB; impórtala por separado o reduce su tamaño.");
+            return addImageDocument(p.split("/").pop().replace(/\.(png|jpe?g|webp|gif)$/i, ""), blob, imageMime(p));
+          }).then(function () { imported++; });
+        });
+      });
+      return chain.then(function () { return { docs: docs.length, images: imgs.length, imported: imported }; });
+    });
+  }
+  function imageMime(name) {
+    var ext = (String(name).match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
+    return ({ jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" })[ext] || "image/png";
+  }
+  function confirmImageOcr() {
+    if (lsGet("folioImageOcrConsent") === "yes") return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      showConfirm("Para leer la imagen, Folio enviará una copia a Google Gemini. El texto reconocido se guardará como texto de lectura y, si iniciaste sesión, se sincronizará con tu biblioteca. ¿Continuar?", function (ok) {
+        if (ok) lsSet("folioImageOcrConsent", "yes");
+        resolve(!!ok);
+      });
+    });
+  }
+  function addImageDocument(title, blob, mime) {
+    mime = mime || "image/png";
+    var source = blob.type === mime ? blob : new Blob([blob], { type: mime });
+    return confirmImageOcr().then(function (ok) { if (!ok) throw { code: "image_consent" }; return geminiImageText(source); }).then(function (text) {
+      var key = "img" + Date.now() + Math.random().toString(36).slice(2, 8);
+      return source.arrayBuffer().then(function (buf) {
+        pdfBackupUpload(key, buf);
+        return pdfDbPut(key, buf).then(function () {
+          addDocument(title, text, { pdfKey: key, viewMode: "text", attachmentType: "image", mimeType: mime });
+        });
       });
     });
   }
@@ -1206,7 +1327,7 @@
   var CLOUD = { client: null, user: null, busy: false, status: "idle", error: "", lastSync: 0, progress: "", members: {}, myRoles: {},
     usage: null, timer: null, liveT: null, channel: null, iv: null, meta: null, warned: {}, tick: 0, lastProg: 0, fp: {}, ownerEmail: {} };
   var CLOUD_TABLES = ["folders", "docs", "tasks"];
-  var LOCAL_ONLY = { cloudOwner: 1, cloudRole: 1, cloudMembers: 1, cloudOwnerEmail: 1 };
+  var LOCAL_ONLY = { cloudOwner: 1, cloudRole: 1, cloudMembers: 1, cloudOwnerEmail: 1, photoSyncPending: 1 };
   var KEEP_LOCAL = { lastIndex: 1, totalSentences: 1, cloudRole: 1, cloudMembers: 1, cloudOwnerEmail: 1 };
 
   function cloudConfigured() { var c = window.FOLIO_CLOUD; return !!(c && c.url && c.anonKey && /^https?:\/\//.test(c.url)); }
@@ -1298,6 +1419,10 @@
     if (r.deleted) {
       if (!local) { delete items[r.id]; return "same"; }
       if (active) return "held";
+      if (kind === "docs" && local.photoSyncPending) {
+        items[r.id] = { k: kind, rev: r.rev, hash: rowHash(kind, fromRow(kind, r)), deleted: true };
+        return "held";
+      }
       if (kind === "docs" && m && rowHash(kind, local) !== m.hash) {
         var rescue = conflictCopy(local); rescue.title = (local.title || "Documento") + " (recuperado)"; state.docs.push(rescue);
         try { toast("Borraron «" + local.title + "» mientras tú lo editabas. Guardé tu versión como «" + rescue.title + "»."); } catch (e) {}
@@ -1311,6 +1436,10 @@
       return "applied";
     }
     if (active) return "held";
+    if (kind === "docs" && local.photoSyncPending) {
+      items[r.id] = { k: kind, rev: r.rev, hash: rowHash(kind, fromRow(kind, r)) };
+      return "held"; // las fotos creadas sin conexión siguen siendo la versión local hasta completar su subida
+    }
     var dirty = !!m && rowHash(kind, local) !== m.hash;
     if (dirty && kind === "docs") {
       var copy = conflictCopy(local); state.docs.push(copy);
@@ -1322,10 +1451,13 @@
   }
   function pageSize(kind) { return kind === "docs" ? 20 : 200; }
   function pullTable(kind, stats) {
-    var since = CLOUD.meta.since[kind], maxSeen = since, held = null, pages = 0;
-    function page(from) {
-      var q = CLOUD.client.from(kind).select("*").order("updated_at", { ascending: true }).limit(pageSize(kind));
-      if (from) q = q.gte("updated_at", from);
+    var since = CLOUD.meta.since[kind], maxSeen = since, held = null, offset = 0;
+    var size = kind === "docs" ? 50 : 200;
+    function page() {
+      /* Paginación por desplazamiento: incluye todos los registros aun si varios
+         comparten updated_at (p. ej., una restauración grande). */
+      var q = CLOUD.client.from(kind).select("*").order("updated_at", { ascending: true }).order("id", { ascending: true }).range(offset, offset + size - 1);
+      if (since) q = q.gte("updated_at", since);
       return q.then(unwrap).then(function (rows) {
         rows = rows || [];
         rows.forEach(function (r) {
@@ -1334,10 +1466,14 @@
           if (r.updated_at > maxSeen) maxSeen = r.updated_at;
           if (res === "applied") stats.n++;
         });
-        if (rows.length >= pageSize(kind) && ++pages < 40 && rows[rows.length - 1].updated_at !== from) return page(rows[rows.length - 1].updated_at);
+        offset += rows.length;
+        if (rows.length === size) {
+          if (offset >= 20000) throw new Error("Hay demasiados cambios para descargar en una sola sincronización. Reintenta sin modificar la biblioteca.");
+          return page();
+        }
       });
     }
-    return page(since || null).then(function () { CLOUD.meta.since[kind] = held || maxSeen; });
+    return page().then(function () { CLOUD.meta.since[kind] = held || maxSeen; });
   }
   function pullMembers() {
     return CLOUD.client.from("folder_members").select("*").then(unwrap).then(function (rows) {
@@ -1370,32 +1506,33 @@
         var m = items[o.id], h, fp = null;
         if (kind === "docs" && m) { fp = docFingerprint(o); if (CLOUD.fp[o.id] === fp) return; }     // atajo: el documento no ha cambiado desde la última vez que se comprobó
         h = rowHash(kind, o);
-        if (m && m.hash === h) { if (fp) CLOUD.fp[o.id] = fp; return; }
-        if (CLOUD.meta.blocked[o.id] === h) { stats.blocked++; return; }
-        if (!canWrite(kind, o)) { CLOUD.meta.blocked[o.id] = h; stats.blocked++; cloudWarnOnce("ro", "Una carpeta compartida contigo es de solo lectura: tus cambios ahí se quedan solo en este dispositivo."); return; }
+        if (m && m.hash === h && !m.deleted) { if (fp) CLOUD.fp[o.id] = fp; return; }
+        /* Un INSERT bloqueado por depender de una carpeta aún no creada debe reintentarse. */
+        if (CLOUD.meta.blocked[o.id] === h && m) return;
+        if (!canWrite(kind, o)) { CLOUD.meta.blocked[o.id] = h; cloudWarnOnce("ro", "Una carpeta compartida contigo es de solo lectura: tus cambios ahí se quedan solo en este dispositivo."); return; }
         jobs.push({ kind: kind, o: o, m: m, h: h, fp: fp, op: m ? "update" : "insert" });
       });
       Object.keys(items).forEach(function (id) { if (items[id].k === kind && !seen[id]) jobs.push({ kind: kind, id: id, m: items[id], op: "delete" }); });
     });
     var order = { folders: 0, docs: 1, tasks: 2 };
-    function folderDepth(id) {
-      var depth = 0, f = findLocal("folders", id), seen = {};
-      while (f && f.parentId && depth < 100 && !seen[f.id]) {
-        seen[f.id] = 1; depth++; f = findLocal("folders", f.parentId);
+    function folderDepth(f) {
+      var depth = 0, seen = {}, fid = f && f.parentId;
+      while (fid && !seen[fid] && depth < 100) {
+        seen[fid] = 1; depth++;
+        var parent = findLocal("folders", fid);
+        fid = parent && parent.parentId;
       }
       return depth;
     }
     jobs.sort(function (a, b) {
-      var ak = a.op === "delete" ? 3 : order[a.kind], bk = b.op === "delete" ? 3 : order[b.kind];
-      if (ak !== bk) return ak - bk;
-      // RLS valida parent_id contra una carpeta ya existente en Supabase.
-      // Por eso las carpetas deben subirse de raíz hacia hojas, no en el orden local.
-      if (ak === 0 && a.o && b.o) return folderDepth(a.o.id) - folderDepth(b.o.id);
+      var pa = a.op === "delete" ? 3 : order[a.kind], pb = b.op === "delete" ? 3 : order[b.kind];
+      if (pa !== pb) return pa - pb;
+      if (a.kind === "folders" && b.kind === "folders" && a.op !== "delete" && b.op !== "delete") return folderDepth(a.o) - folderDepth(b.o);
       return 0;
     });
     return seqRun(jobs, function (j, n, total) {
       if (total > 6) { CLOUD.progress = "Sincronizando " + n + " de " + total + "…"; if (n % 3 === 0) renderBk(); }
-      return pushJob(j).then(function (result) { if (result === "blocked") stats.blocked++; else stats.pushed++; if (n % 10 === 0) return metaSave(); });
+      return pushJob(j).then(function () { stats.pushed++; if (n % 10 === 0) return metaSave(); });
     });
   }
   function fetchOne(kind, id) { return CLOUD.client.from(kind).select("*").eq("id", id).then(unwrap).then(function (rows) { return rows && rows[0] ? rows[0] : null; }); }
@@ -1404,22 +1541,33 @@
     if (j.op === "insert") {
       return CLOUD.client.from(kind).insert(toRow(kind, j.o)).select("rev").then(function (r) {
         if (r.error) {
-          if (String(r.error.code) === "23505") return fetchOne(kind, j.o.id).then(function (remote) { delete items[j.o.id]; if (remote) applyRemote(kind, remote); });
-          if (isPermission(r.error)) { CLOUD.meta.blocked[j.o.id] = j.h; cloudWarnOnce("perm", "Supabase rechazó guardar «" + (j.o.title || j.o.name || "un elemento") + "». La sincronización quedará marcada como incompleta."); return "blocked"; }
+          if (String(r.error.code) === "23505") return fetchOne(kind, j.o.id).then(function (remote) {
+            if (remote && kind === "docs" && j.o.photoSyncPending) {
+              items[j.o.id] = { k: kind, rev: remote.rev, hash: rowHash(kind, fromRow(kind, remote)), deleted: !!remote.deleted };
+              return; // reintentar UPDATE en el siguiente ciclo sin reemplazar las fotos locales
+            }
+            delete items[j.o.id]; if (remote) applyRemote(kind, remote);
+          });
+          if (isPermission(r.error)) {
+            if (!j.o.cloudOwner || j.o.cloudOwner === CLOUD.user.id) throw cloudErr(r.error);
+            CLOUD.meta.blocked[j.o.id] = j.h;
+            cloudWarnOnce("perm", "No tienes permiso para guardar «" + (j.o.title || j.o.name || "un elemento") + "» en la nube."); return;
+          }
           throw cloudErr(r.error);
         }
         var row = Array.isArray(r.data) ? r.data[0] : r.data;
         items[j.o.id] = { k: kind, rev: row.rev, hash: j.h };
+        delete pendingLocalIds[kind][j.o.id];
       });
     }
     if (j.op === "update") {
       var patch = toRow(kind, j.o); delete patch.id; patch.deleted = false;
       return CLOUD.client.from(kind).update(patch).eq("id", j.o.id).eq("rev", j.m.rev).select("rev").then(function (r) {
-        if (r.error) { if (isPermission(r.error)) { CLOUD.meta.blocked[j.o.id] = j.h; return "blocked"; } throw cloudErr(r.error); }
+        if (r.error) { if (isPermission(r.error)) { CLOUD.meta.blocked[j.o.id] = j.h; return; } throw cloudErr(r.error); }
         if (r.data && r.data.length) { items[j.o.id] = { k: kind, rev: r.data[0].rev, hash: j.h }; if (j.fp) CLOUD.fp[j.o.id] = j.fp; return; }
         return fetchOne(kind, j.o.id).then(function (remote) {
-          if (!remote) { CLOUD.meta.blocked[j.o.id] = j.h; return "blocked"; }
-          if (remote.rev === j.m.rev) { CLOUD.meta.blocked[j.o.id] = j.h; return "blocked"; }           // misma versión: es un permiso, no un conflicto
+          if (!remote) { CLOUD.meta.blocked[j.o.id] = j.h; return; }
+          if (remote.rev === j.m.rev) { CLOUD.meta.blocked[j.o.id] = j.h; return; }           // misma versión: es un permiso, no un conflicto
           applyRemote(kind, remote);
         });
       });
@@ -1460,15 +1608,16 @@
   }
 
   /* ---- PDFs ---- */
-  function uploadPdf(d) {
-    var key = d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
+  function uploadPdf(d, attachmentKey) {
+    var key = attachmentKey || d.pdfKey, me = CLOUD.user.id, m = CLOUD.meta;
     return pdfDbGet(key).then(function (buf) {
-      if (!buf) return;
+      if (!buf) return "missing-local";
       return CLOUD.client.from("pdf_files").insert({ key: key, size_bytes: buf.byteLength }).then(function (r) {
         if (r.error && String(r.error.code) !== "23505") {
           if (String(r.error.code) === "54000" || /espacio/i.test(r.error.message || "")) { m.pdfBad[key] = 1; cloudWarnOnce("quota", "No hay espacio en tu nube para «" + d.title + "». El PDF queda solo en este dispositivo."); return "stop"; }
           throw cloudErr(r.error);
         }
+        /* El bucket existente admite application/pdf; mimeType conserva el formato real en el registro. */
         return CLOUD.client.storage.from("pdfs").upload(me + "/" + key + ".pdf", new Blob([buf], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true }).then(function (u) {
           if (u && u.error) {
             if (/maximum|exceed|size|413/i.test((u.error.message || "") + (u.error.statusCode || ""))) {
@@ -1482,22 +1631,62 @@
       });
     });
   }
-  function syncPdfs() {
-    var me = CLOUD.user.id, m = CLOUD.meta, jobs = state.docs.filter(function (d) { return d.pdfKey && (!d.cloudOwner || d.cloudOwner === me) && !m.pdf[d.pdfKey] && !m.pdfBad[d.pdfKey] && m.items[d.id]; });
-    return seqRun(jobs, function (d, n, total) { CLOUD.progress = "Subiendo PDFs " + n + " de " + total + "…"; renderBk(); return uploadPdf(d); });
+  function listCloudPdfKeys() {
+    var folder = CLOUD.user.id, out = {}, offset = 0, limit = 1000;
+    function page() {
+      return CLOUD.client.storage.from("pdfs").list(folder, { limit: limit, offset: offset })
+        .then(function (r) {
+          if (r && r.error) throw cloudErr(r.error);
+          var rows = (r && r.data) || [];
+          rows.forEach(function (item) { if (item && item.name) out[item.name] = 1; });
+          offset += rows.length;
+          if (rows.length === limit) return page();
+          return out;
+        });
+    }
+    return page();
   }
-  function cloudGetPdf(doc) {
-    if (!CLOUD.user || !CLOUD.client || !doc || !doc.pdfKey) return Promise.resolve(null);
+  function syncPdfs() {
+    var me = CLOUD.user.id, m = CLOUD.meta, assets = {}, pending = [];
+    state.docs.forEach(function (d) {
+      if ((!d.cloudOwner || d.cloudOwner === me) && m.items[d.id]) {
+        [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) {
+          if (!assets[key]) assets[key] = { doc: d, key: key };
+        });
+      }
+    });
+    if (!Object.keys(assets).length) return Promise.resolve();
+    CLOUD.progress = "Comprobando archivos de imagen y PDF…"; renderBk();
+    return listCloudPdfKeys().then(function (remote) {
+      var jobs = [];
+      Object.keys(assets).forEach(function (key) {
+        if (remote[key + ".pdf"]) { m.pdf[key] = 1; delete m.pdfBad[key]; return; }
+        delete m.pdf[key];
+        /* Reintentar los archivos ausentes aunque hubiera quedado una marca de error antigua. */
+        delete m.pdfBad[key];
+        jobs.push(assets[key]);
+      });
+      return seqRun(jobs, function (job, n, total) {
+        CLOUD.progress = "Reparando archivos " + n + " de " + total + "…"; renderBk();
+        return uploadPdf(job.doc, job.key).then(function (result) { if (result === "stop" || result === "missing-local") pending.push(job); });
+      }).then(function () {
+        if (pending.length) throw new Error(pending.length + " imágenes o PDF siguen pendientes: algún archivo no está guardado en este dispositivo o excede el límite de almacenamiento.");
+      });
+    });
+  }
+  function cloudGetPdf(doc, attachmentKey) {
+    var key = attachmentKey || (doc && doc.pdfKey);
+    if (!CLOUD.user || !CLOUD.client || !doc || !key) return Promise.resolve(null);
     var owner = doc.cloudOwner || CLOUD.user.id;
-    return CLOUD.client.storage.from("pdfs").download(owner + "/" + doc.pdfKey + ".pdf").then(function (r) {
+    return CLOUD.client.storage.from("pdfs").download(owner + "/" + key + ".pdf").then(function (r) {
       if (!r || r.error || !r.data) return null;
-      return r.data.arrayBuffer().then(function (buf) { return pdfDbPut(doc.pdfKey, buf.slice(0)).then(function () { return buf; }); });
+      return r.data.arrayBuffer().then(function (buf) { return pdfDbPut(key, buf.slice(0)).then(function () { return buf; }); });
     }).catch(function () { return null; });
   }
   function cloudDownloadAllPdfs() {
-    var docs = state.docs.filter(function (d) { return d.pdfKey; }), got = 0;
-    return seqRun(docs, function (d, n, total) {
-      return pdfDbGet(d.pdfKey).then(function (b) { if (b) return; CLOUD.progress = "Descargando PDFs " + n + " de " + total + "…"; renderBk(); return cloudGetPdf(d).then(function (x) { if (x) got++; }); });
+    var jobs = []; state.docs.forEach(function (d) { [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) { jobs.push({ doc: d, key: key }); }); }); var got = 0;
+    return seqRun(jobs, function (job, n, total) {
+      return pdfDbGet(job.key).then(function (b) { if (b) return; CLOUD.progress = "Descargando archivos " + n + " de " + total + "…"; renderBk(); return cloudGetPdf(job.doc, job.key).then(function (x) { if (x) got++; }); });
     }).then(function () { CLOUD.progress = ""; renderBk(); return got; });
   }
   function cloudUsage() {
@@ -1541,30 +1730,29 @@
     if (!CLOUD.user || !CLOUD.client || CLOUD.busy || !navigator.onLine) return Promise.resolve(false);
     if (SV.dirty || SV.busy || SV.timer) { cloudSchedule(2500); return Promise.resolve(false); }
     CLOUD.busy = true; CLOUD.status = "sync"; CLOUD.error = ""; CLOUD.progress = ""; renderBk();
-    var stats = { n: 0, pushed: 0, blocked: 0 };
+    var stats = { n: 0, pushed: 0 };
     return withLock(function () {
       return refreshFromStore().then(metaLoad).then(function (m) {
         CLOUD.meta = (m && m.userId === CLOUD.user.id) ? m : metaBlank(CLOUD.user.id);
         CLOUD.meta.pdfBad = CLOUD.meta.pdfBad || {}; CLOUD.meta.blocked = CLOUD.meta.blocked || {}; CLOUD.meta.prog = CLOUD.meta.prog || {}; CLOUD.meta.pdf = CLOUD.meta.pdf || {};
-        if (force) CLOUD.meta.blocked = {}; // El botón manual vuelve a intentar elementos previamente rechazados.
       }).then(function () { return pullTable("folders", stats); }).then(pullMembers)
         .then(function () { return pullTable("docs", stats); }).then(function () { return pullTable("tasks", stats); })
         .then(function () { return pushAll(stats); })
         .then(function () { return syncProgress(force); })
         .then(function () { return syncPdfs(); })
+        .then(function () {
+          var changed = false;
+          state.docs.forEach(function (d) {
+            if (d.photoSyncPending && CLOUD.meta.items[d.id] && !CLOUD.meta.items[d.id].deleted &&
+                CLOUD.meta.items[d.id].hash === rowHash("docs", d)) { delete d.photoSyncPending; changed = true; }
+          });
+          if (changed) saveLibrary();
+        })
         .then(function () { CLOUD.tick++; if (CLOUD.tick % 10 === 1) return reconcileVisible().then(function (n) { stats.n += n; }); })
         .then(cloudUsage)
         .then(function () { return metaSave(); })
         .then(function () { if (stats.n || CLOUD.progChanged) { CLOUD.progChanged = false; saveLibrary(); renderLibrary(); renderSideList(); } });
-    }).then(function (r) {
-      if (r !== "locked") {
-        if (stats.blocked) {
-          CLOUD.status = "error";
-          CLOUD.error = stats.blocked + (stats.blocked === 1 ? " elemento no se pudo guardar en la nube. Pulsa Sincronizar ahora para reintentar." : " elementos no se pudieron guardar en la nube. Pulsa Sincronizar ahora para reintentar.");
-          cloudWarnOnce("partial", CLOUD.error);
-        } else { CLOUD.lastSync = Date.now(); CLOUD.status = "ok"; }
-      }
-    })
+    }).then(function (r) { if (r !== "locked") { CLOUD.lastSync = Date.now(); CLOUD.status = "ok"; } })
       .catch(function (e) { CLOUD.status = "error"; CLOUD.error = cloudFriendly(e); })
       .then(function () { CLOUD.busy = false; CLOUD.progress = ""; renderBk(); return CLOUD.status === "ok"; });
   }
@@ -1764,8 +1952,8 @@
       var tasks = JSON.parse(JSON.stringify(state.tasks.filter(function (t) { return ids.indexOf(t.docId) !== -1; })));
       var zip = new JSZip(), jobs = [];
       docs.forEach(function (d) {
-        if (!d.pdfKey) return;
-        jobs.push(getPdfBytes(d.pdfKey).then(function (buf) { if (buf) zip.file("pdfs/" + d.pdfKey + ".pdf", buf); else { delete d.pdfKey; delete d.viewMode; } }));
+        var keys = [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean);
+        keys.forEach(function (key) { jobs.push(getPdfBytes(key).then(function (buf) { if (buf) zip.file("pdfs/" + key + ".pdf", buf); else if (key === d.pdfKey) { delete d.pdfKey; delete d.viewMode; } })); });
       });
       return Promise.all(jobs).then(function () {
         zip.file("carpeta.json", JSON.stringify({ formato: "folio-carpeta", version: 1, completa: true, creado: Date.now(), raiz: rootId, carpetas: folders, documentos: docs, tareas: tasks }));
@@ -1866,6 +2054,7 @@
   }
   /* --- Varias ventanas: fusión de tres vías + aviso entre pestañas --- */
   var lastIds = { docs: {}, folders: {}, tasks: {} };
+  var pendingLocalIds = { docs: {}, folders: {}, tasks: {} };
   function snapIds() {
     ["docs", "folders", "tasks"].forEach(function (k) { lastIds[k] = {}; state[k].forEach(function (x) { lastIds[k][x.id] = 1; }); });
   }
@@ -1877,8 +2066,8 @@
       rl.forEach(function (x) { rmap[x.id] = x; });
       state[k].forEach(function (x) {
         lmap[x.id] = x;
-        if (!rmap[x.id] && lastIds[k][x.id]) return;                  // otra ventana la borró
-        if (rmap[x.id] && !write && !(k === "docs" && x.id === state.activeId)) Object.assign(x, rmap[x.id]);
+        if (!rmap[x.id] && lastIds[k][x.id] && !pendingLocalIds[k][x.id] && !x.photoSyncPending) return; // otra ventana la borró; conserva creaciones pendientes de nube
+        if (rmap[x.id] && !write && !(k === "docs" && (x.id === state.activeId || x.photoSyncPending))) Object.assign(x, rmap[x.id]);
         out.push(x);
       });
       rl.forEach(function (x) { if (!lmap[x.id] && !lastIds[k][x.id]) out.push(x); });   // la creó otra ventana
@@ -1950,7 +2139,9 @@
       var have = {}; (d.keys || []).forEach(function (k) { have[k] = 1; });
       var chain = Promise.resolve();
       state.docs.forEach(function (doc) {
-        if (doc.pdfKey && !have[doc.pdfKey]) chain = chain.then(function () { return pdfDbGet(doc.pdfKey).then(function (buf) { if (buf) return pdfBackupUpload(doc.pdfKey, buf); }); });
+        [doc.pdfKey].concat((doc.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(function (key) {
+          if (!have[key]) chain = chain.then(function () { return pdfDbGet(key).then(function (buf) { if (buf) return pdfBackupUpload(key, buf); }); });
+        });
       });
     }).catch(function () {});
   }
@@ -2214,6 +2405,8 @@
     while (i < lines.length) {
       var line = lines[i];
       if (!line.trim()) { i++; continue; }
+      var imageMatch = line.trim().match(/^!\[([^\]]*)\]\(folio-image:([^)]+)\)$/);
+      if (imageMatch) { blocks.push({ type: "image", alt: imageMatch[1], key: imageMatch[2] }); i++; continue; }
       var hMatch = line.match(/^(#{1,6})\s+(.*)$/);
       if (hMatch) { blocks.push({ type: "h", level: hMatch[1].length, text: hMatch[2].trim() }); i++; continue; }
       if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) { blocks.push({ type: "hr" }); i++; continue; }
@@ -2306,7 +2499,8 @@
   }
   function openFolder(id) { state.currentFolderId = id; state.selected = {}; renderLibrary(); }
   function createFolder(name) {
-    state.folders.push({ id: "f" + Date.now() + Math.random().toString(36).slice(2, 7), name: name, parentId: state.currentFolderId, createdAt: Date.now() });
+    var folder = { id: "f" + Date.now() + Math.random().toString(36).slice(2, 7), name: name, parentId: state.currentFolderId, createdAt: Date.now() };
+    pendingLocalIds.folders[folder.id] = true; state.folders.push(folder);
     saveLibrary(); renderLibrary();
   }
   function collectDescendantFolderIds(id) {
@@ -2319,7 +2513,7 @@
     var ids = collectDescendantFolderIds(id);
     var removed = state.docs.filter(function (d) { return ids.indexOf(d.folderId) !== -1; }).map(function (d) { return d.id; });
     if (removed.indexOf(state.activeId) !== -1) { stopSpeech(); state.activeId = null; }
-    state.docs.forEach(function (d) { if (d.pdfKey && ids.indexOf(d.folderId) !== -1) pdfDbDel(d.pdfKey); });
+    state.docs.forEach(function (d) { if (ids.indexOf(d.folderId) !== -1) [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(pdfDbDel); });
     state.docs = state.docs.filter(function (d) { return ids.indexOf(d.folderId) === -1; });
     state.folders = state.folders.filter(function (f) { return ids.indexOf(f.id) === -1; });
     if (ids.indexOf(state.currentFolderId) !== -1) state.currentFolderId = folder.parentId || null;
@@ -2443,8 +2637,91 @@
       }
       tableBody.appendChild(it.kind === "folder" ? buildFolderRow(it.obj) : buildDocRow(it.obj));
     });
+    syncRowSelectionStyles();
     updateBulkBar();
   }
+
+  function syncRowSelectionStyles() {
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) {
+      var id = row.dataset.id, selected = !!state.selected[id];
+      row.classList.toggle("drag-selected", selected);
+      var cb = row.querySelector('input[type="checkbox"]'); if (cb) cb.checked = selected;
+    });
+  }
+  var selectionDrag = null;
+  var suppressSelectionClick = false;
+  var selectionAutoScroll = null;
+  function restoreSelectionRows() {
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = true; });
+  }
+  function cancelSelectionDrag() {
+    if (!selectionDrag) return;
+    clearTimeout(selectionDrag.timer);
+    if (selectionDrag.box) selectionDrag.box.remove();
+    if (selectionAutoScroll) { clearInterval(selectionAutoScroll); selectionAutoScroll = null; }
+    restoreSelectionRows(); selectionDrag = null;
+  }
+  tableBody.addEventListener("pointerdown", function (e) {
+    if (e.pointerType === "touch" || e.button !== 0 || e.target.closest("button:not(.row-name),input,.row-menu")) return;
+    var startingRow = e.target.closest(".row");
+    // Una fila ya seleccionada debe conservar el arrastre nativo para mover el grupo.
+    if (startingRow && state.selected[startingRow.dataset.id]) return;
+    var bodyRect = tableBody.getBoundingClientRect();
+    selectionDrag = { x: e.clientX, y: e.clientY, clientX: e.clientX, clientY: e.clientY, rect: bodyRect, additive: e.ctrlKey || e.metaKey, moved: false, active: false, pointerId: e.pointerId };
+    var pending = selectionDrag;
+    pending.timer = setTimeout(function () { if (selectionDrag === pending) pending.active = true; }, 350);
+    Array.prototype.forEach.call(tableBody.querySelectorAll(".row"), function (row) { row.draggable = false; });
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    selectionDrag.clientX = e.clientX; selectionDrag.clientY = e.clientY;
+    if (!selectionDrag.active) {
+      if (Math.hypot(e.clientX - selectionDrag.x, e.clientY - selectionDrag.y) > 8) cancelSelectionDrag();
+      return;
+    }
+    if (Math.abs(e.clientX - selectionDrag.x) + Math.abs(e.clientY - selectionDrag.y) < 5 && !selectionDrag.moved) return;
+    if (!selectionDrag.moved) {
+      selectionDrag.moved = true;
+      if (!selectionDrag.additive) state.selected = {};
+      selectionDrag.box = document.createElement("div"); selectionDrag.box.className = "selection-box"; tableBody.appendChild(selectionDrag.box);
+    }
+    updateSelectionDrag();
+    if (!selectionAutoScroll) selectionAutoScroll = setInterval(function () {
+      if (!selectionDrag || !selectionDrag.moved) return;
+      var wrap = tableBody.parentElement, wr = wrap.getBoundingClientRect(), y = selectionDrag.clientY, edge = 48, delta = 0;
+      if (y < wr.top + edge && y >= wr.top) delta = -Math.max(5, Math.round((wr.top + edge - y) / 3));
+      else if (y > wr.bottom - edge && y <= wr.bottom) delta = Math.max(5, Math.round((y - (wr.bottom - edge)) / 3));
+      if (delta) { wrap.scrollTop += delta; updateSelectionDrag(); }
+    }, 16);
+  });
+  function updateSelectionDrag() {
+    if (!selectionDrag || !selectionDrag.moved) return;
+    var left = Math.min(selectionDrag.x, selectionDrag.clientX), top = Math.min(selectionDrag.y, selectionDrag.clientY);
+    var right = Math.max(selectionDrag.x, selectionDrag.clientX), bottom = Math.max(selectionDrag.y, selectionDrag.clientY), br = tableBody.getBoundingClientRect();
+    selectionDrag.box.style.left = (left - br.left + tableBody.scrollLeft) + "px";
+    selectionDrag.box.style.top = (top - br.top + tableBody.scrollTop) + "px";
+    selectionDrag.box.style.width = (right - left) + "px"; selectionDrag.box.style.height = (bottom - top) + "px";
+    var area = { left: left, top: top, right: right, bottom: bottom };
+    Array.prototype.forEach.call(tableBody.querySelectorAll('.row[data-kind="doc"]'), function (row) {
+      var r = row.getBoundingClientRect(), hit = r.right >= area.left && r.left <= area.right && r.bottom >= area.top && r.top <= area.bottom;
+      if (hit) state.selected[row.dataset.id] = true;
+      else if (!selectionDrag.additive) delete state.selected[row.dataset.id];
+    });
+    syncRowSelectionStyles(); updateBulkBar();
+  }
+  document.addEventListener("pointerup", function (e) {
+    if (!selectionDrag || e.pointerId !== selectionDrag.pointerId) return;
+    if (selectionDrag.moved) { suppressSelectionClick = true; setTimeout(function () { suppressSelectionClick = false; }, 0); syncRowSelectionStyles(); updateBulkBar(); }
+    cancelSelectionDrag();
+  });
+  document.addEventListener("pointercancel", cancelSelectionDrag);
+  tableBody.addEventListener("wheel", function () { if (selectionDrag && !selectionDrag.active) cancelSelectionDrag(); }, { passive: true });
+  tableBody.addEventListener("click", function (e) {
+    if (suppressSelectionClick) { e.preventDefault(); e.stopPropagation(); return; }
+    if (!e.target.closest(".row,button,input,.selection-box") && Object.keys(state.selected).length) {
+      state.selected = {}; syncRowSelectionStyles(); updateBulkBar();
+    }
+  }, true);
 
   function buildFolderRow(folder) {
     var count = state.docs.filter(function (d) { return d.folderId === folder.id; }).length +
@@ -2512,7 +2789,8 @@
   var dragData = null;
   function attachDragHandlers(row, id, kind) {
     row.addEventListener("dragstart", function (e) {
-      dragData = { id: id, kind: kind };
+      var selected = Object.keys(state.selected).filter(function (key) { return state.selected[key]; });
+      dragData = selected.indexOf(id) !== -1 ? { ids: selected, id: id, kind: kind } : { ids: [id], id: id, kind: kind };
       row.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
       try { e.dataTransfer.setData("text/plain", id); } catch (err) {}
@@ -2528,7 +2806,8 @@
     row.addEventListener("drop", function (e) {
       e.preventDefault(); row.classList.remove("drag-over");
       if (!dragData || dragData.id === targetFolderId) return;
-      moveItem(dragData.id, dragData.kind, targetFolderId);
+      if (dragData.ids && dragData.ids.length > 1) moveSelectedItems(dragData.ids, targetFolderId);
+      else moveItem(dragData.id, dragData.kind, targetFolderId);
       dragData = null;
     });
   }
@@ -2543,10 +2822,19 @@
     }
     saveLibrary(); renderLibrary();
   }
+  function moveSelectedItems(ids, targetFolderId) {
+    var movingFolders = ids.filter(function (id) { return state.folders.some(function (f) { return f.id === id; }); });
+    if (movingFolders.some(function (id) { return collectDescendantFolderIds(id).indexOf(targetFolderId) !== -1; })) { toast("No se puede mover una carpeta dentro de sí misma."); return; }
+    ids.forEach(function (id) {
+      var doc = state.docs.find(function (d) { return d.id === id; }); if (doc) { doc.folderId = targetFolderId; return; }
+      var folder = state.folders.find(function (f) { return f.id === id; }); if (folder) folder.parentId = targetFolderId;
+    });
+    state.selected = {}; saveLibrary(); renderLibrary();
+  }
 
   function deleteDoc(id, skipRender) {
     stopSpeech();
-    state.docs.forEach(function (d) { if (d.id === id && d.pdfKey) pdfDbDel(d.pdfKey); });
+    state.docs.forEach(function (d) { if (d.id === id) [d.pdfKey].concat((d.inlineImages || []).map(function (x) { return x.key; })).filter(Boolean).forEach(pdfDbDel); });
     state.docs = state.docs.filter(function (d) { return d.id !== id; });
     saveLibrary();
     if (state.activeId === id) state.activeId = null;
@@ -2652,7 +2940,8 @@
       '</div>' +
       '';
     readerInner.innerHTML =
-      '<h1 class="reader-title"></h1><p class="reader-sub"></p><div class="reader-text" id="readerText"></div>';
+      '<h1 class="reader-title"></h1><p class="reader-sub"></p>' + (doc.attachmentType === "image" ? '<div class="folio-image-wrap"><img class="folio-image-preview" alt="Imagen adjunta"><div class="folio-image-status" role="status">Cargando imagen…</div></div>' : '') + '<div class="reader-text" id="readerText"></div>';
+    readerInner.classList.toggle("image-on", doc.attachmentType === "image");
     readerInner.querySelector(".reader-title").textContent = doc.title;
     readerInner.querySelector(".reader-sub").textContent = wordCount(doc.text) + " palabras · " + estimateMinutes(doc.text) + " min de lectura";
     document.getElementById("railAdd").addEventListener("click", openModal);
@@ -2673,9 +2962,30 @@
     });
 
     var textEl = document.getElementById("readerText");
+    if (doc.attachmentType === "image" && doc.pdfKey) {
+      var imageEl = readerInner.querySelector(".folio-image-preview");
+      var imageStatus = readerInner.querySelector(".folio-image-status");
+      function loadAttachedImage() {
+        if (imageStatus) imageStatus.textContent = "Cargando imagen…";
+        getPdfBytes(doc.pdfKey).then(function (buf) {
+          if (!imageEl || getActiveDoc() !== doc) return;
+          if (!buf) {
+            imageStatus.textContent = "No se encontró la imagen en este dispositivo.";
+            var retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Volver a cargar";
+            retry.addEventListener("click", loadAttachedImage); imageStatus.appendChild(retry); return;
+          }
+          if (imageEl._folioUrl) URL.revokeObjectURL(imageEl._folioUrl);
+          imageEl._folioUrl = URL.createObjectURL(new Blob([buf], { type: doc.mimeType || "image/png" }));
+          imageEl.onload = function () { if (imageStatus) imageStatus.hidden = true; };
+          imageEl.onerror = function () { if (imageStatus) { imageStatus.hidden = false; imageStatus.textContent = "No se pudo mostrar la imagen. Toca para volver a cargar."; var again = document.createElement("button"); again.type = "button"; again.textContent = "Volver a cargar"; again.addEventListener("click", loadAttachedImage); imageStatus.appendChild(again); } };
+          imageEl.src = imageEl._folioUrl;
+        }).catch(function () { if (imageStatus) imageStatus.textContent = "No se pudo cargar la imagen."; });
+      }
+      loadAttachedImage();
+    }
     state.sentences = [];
 
-    var canUseCache = doc.renderedHtml && (doc.renderedHtmlSource === textHash(doc.text) || doc.renderedHtmlSource === doc.text);
+    var canUseCache = doc.renderedHtml && doc.text.indexOf("folio-image:") === -1 && (doc.renderedHtmlSource === textHash(doc.text) || doc.renderedHtmlSource === doc.text);
 
     if (canUseCache) {
       textEl.innerHTML = doc.renderedHtml;
@@ -2714,7 +3024,11 @@
     }
 
     parseMarkdownBlocks(doc.text).forEach(function (block) {
-      if (block.type === "h") {
+      if (block.type === "image") {
+        var image = document.createElement("img"); image.className = "folio-image-preview inline-doc-image"; image.alt = block.alt || "Imagen del documento";
+        textEl.appendChild(image);
+        getPdfBytes(block.key).then(function (buf) { if (!buf || !image.isConnected) return; image.src = URL.createObjectURL(new Blob([buf], { type: ((doc.inlineImages || []).find(function (it) { return it.key === block.key; }) || {}).mimeType || "image/png" })); });
+      } else if (block.type === "h") {
         var h = document.createElement("h" + Math.min(block.level, 3));
         splitSentencesRaw(block.text).forEach(function (c) { h.appendChild(makeSentenceSpan(c)); });
         textEl.appendChild(h);
@@ -2826,7 +3140,8 @@
     var doc = { id: "d" + Date.now() + Math.random().toString(36).slice(2, 7), title: title || "Documento sin título", text: text,
       folderId: state.currentFolderId, createdAt: Date.now(), lastIndex: 0, totalSentences: 0 };
     if (extra) Object.assign(doc, extra);
-    state.docs.push(doc); saveLibrary(); renderLibrary(); renderSideList(); openDoc(doc.id);
+    pendingLocalIds.docs[doc.id] = true; state.docs.push(doc); saveLibrary(); renderLibrary(); renderSideList(); openDoc(doc.id);
+    return doc;
   }
 
   /* ---------- speech ---------- */
@@ -3098,7 +3413,116 @@
   /* ---------- modal ---------- */
   var modalVeil = document.getElementById("modalVeil");
   var editingDocId = null;
+  var pendingEditorImages = [];
+  var editorImageRefs = [];
+  var slidePhotos = [];
+  var slideSaving = false;
+  function clearSlidePhotos() {
+    slidePhotos.forEach(function (photo) { URL.revokeObjectURL(photo.url); });
+    slidePhotos = [];
+    renderSlidePhotos();
+  }
+  function renderSlidePhotos() {
+    var list = document.getElementById("slideList");
+    list.textContent = "";
+    slidePhotos.forEach(function (photo, i) {
+      var item = document.createElement("div"); item.className = "slide-item";
+      var preview = document.createElement("img"); preview.src = photo.url; preview.alt = "Diapositiva " + (i + 1);
+      var label = document.createElement("span"); label.textContent = (i + 1) + ". " + photo.file.name;
+      item.appendChild(preview); item.appendChild(label);
+      [["↑", -1, "Subir"], ["↓", 1, "Bajar"], ["×", 0, "Quitar"]].forEach(function (action) {
+        var button = document.createElement("button"); button.type = "button"; button.textContent = action[0];
+        button.setAttribute("aria-label", action[2] + " diapositiva " + (i + 1));
+        button.disabled = slideSaving || (action[1] && (i + action[1] < 0 || i + action[1] >= slidePhotos.length));
+        button.addEventListener("click", function () {
+          if (action[1]) { var other = i + action[1]; var swap = slidePhotos[i]; slidePhotos[i] = slidePhotos[other]; slidePhotos[other] = swap; }
+          else { URL.revokeObjectURL(slidePhotos[i].url); slidePhotos.splice(i, 1); }
+          renderSlidePhotos();
+        });
+        item.appendChild(button);
+      });
+      list.appendChild(item);
+    });
+    document.getElementById("slideSaveBtn").disabled = !slidePhotos.length || slideSaving;
+  }
+  function addSlidePhotos(files) {
+    files.forEach(function (file) {
+      if (slidePhotos.length >= 40) { toast("Máximo 40 fotos por cuaderno."); return; }
+      if (!/^image\//.test(file.type) || file.size > 15 * 1024 * 1024) { toast("Usa fotos de hasta 15 MB cada una."); return; }
+      slidePhotos.push({ file: file, url: URL.createObjectURL(file) });
+    });
+    renderSlidePhotos();
+  }
+  document.getElementById("slideCameraBtn").addEventListener("click", function () { document.getElementById("slideCameraInput").click(); });
+  document.getElementById("slideFilesBtn").addEventListener("click", function () { document.getElementById("slideFilesInput").click(); });
+  ["slideCameraInput", "slideFilesInput"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function (e) {
+      addSlidePhotos(Array.prototype.slice.call(e.target.files || [])); e.target.value = "";
+    });
+  });
+  function compressSlide(file) {
+    var decoded = typeof createImageBitmap === "function" ? createImageBitmap(file).catch(function () { return slideImageFallback(file); }) : slideImageFallback(file);
+    return decoded.then(function (bitmap) {
+      var scale = Math.min(1, 2560 / Math.max(bitmap.width, bitmap.height));
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      if (bitmap.close) bitmap.close();
+      if (bitmap._slideUrl) URL.revokeObjectURL(bitmap._slideUrl);
+      return new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) { if (blob) resolve(blob); else reject(new Error("No se pudo procesar la foto.")); }, "image/jpeg", 0.92);
+      });
+    });
+  }
+  function slideImageFallback(file) {
+    return new Promise(function (resolve, reject) {
+      var image = new Image(), url = URL.createObjectURL(file);
+      image.onload = function () { image._slideUrl = url; resolve(image); };
+      image.onerror = function () { URL.revokeObjectURL(url); reject(new Error("No se pudo abrir esta foto. Usa JPG, PNG o HEIC compatible con el iPhone.")); };
+      image.src = url;
+    });
+  }
+  document.getElementById("slideSaveBtn").addEventListener("click", function () {
+    if (slideSaving || !slidePhotos.length) return;
+    slideSaving = true; renderSlidePhotos();
+    var photos = slidePhotos.slice(), title = document.getElementById("slideTitle").value.trim() || "Diapositivas de la clase";
+    var status = document.getElementById("slideStatus"), refs = [], parts = [], stored = [], total = 0, docCreated = false;
+    var chain = Promise.resolve();
+    photos.forEach(function (photo, i) {
+      chain = chain.then(function () {
+        status.textContent = "Guardando diapositiva " + (i + 1) + " de " + photos.length + "…";
+        return compressSlide(photo.file).then(function (blob) {
+          total += blob.size;
+          if (total > 60 * 1024 * 1024) throw new Error("El cuaderno supera 60 MB. Guárdalo en dos partes.");
+          var key = "slide" + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+          return blob.arrayBuffer().then(function (buf) { return pdfDbPut(key, buf).then(function () {
+            stored.push(key); refs.push({ key: key, name: "Diapositiva " + (i + 1), mimeType: "image/jpeg" });
+            parts.push("## Diapositiva " + (i + 1) + "\n\n![Diapositiva " + (i + 1) + "](folio-image:" + key + ")");
+          }); });
+        });
+      });
+    });
+    chain.then(function () {
+      var doc = addDocument(title, parts.join("\n\n"), { inlineImages: refs, photoSyncPending: true });
+      docCreated = true;
+      return flushLibrary().then(function () {
+        if (SV.dirty) throw new Error("No se pudo guardar en este dispositivo. Conserva las fotos y vuelve a intentarlo.");
+        return KV.broken ? readStore() : kvGetLibrary();
+      }).then(function (saved) {
+        if (!saved || !(saved.docs || []).some(function (item) { return item.id === doc.id &&
+          (item.inlineImages || []).length === refs.length; })) throw new Error("El documento no quedó guardado. Conserva las fotos y vuelve a intentarlo.");
+        clearSlidePhotos(); slideSaving = false; closeModal();
+        if (CLOUD.user) cloudSchedule(100);
+        if (SERVER.available) syncPdfBackups();
+      });
+    }).catch(function (err) {
+      if (!docCreated) stored.forEach(pdfDbDel);
+      status.textContent = (err && err.message) || "No se pudieron guardar las fotos.";
+      slideSaving = false; renderSlidePhotos();
+    });
+  });
   function openModal() {
+    clearSlidePhotos(); slideSaving = false; document.getElementById("slideTitle").value = ""; document.getElementById("slideStatus").textContent = "";
     editingDocId = null;
     modalVeil.classList.add("open");
     document.getElementById("modalTitle").textContent = "Agregar documento";
@@ -3106,6 +3530,8 @@
     document.getElementById("pasteTitle").value = ""; document.getElementById("pasteText").value = "";
     document.getElementById("fileStatus").textContent = ""; document.getElementById("fileStatus").className = "status-line";
     document.getElementById("fileInput").value = ""; setTab("paste");
+    pendingEditorImages = []; editorImageRefs = []; document.getElementById("inlineImageInput").value = "";
+    document.getElementById("inlineImageLibrary").hidden = true; document.getElementById("libraryImageSelect").innerHTML = '<option value="">Selecciona una imagen de Folio…</option>'; document.getElementById("insertLibraryImageBtn").disabled = true;
   }
   function openEditModal(doc) {
     editingDocId = doc.id;
@@ -3114,9 +3540,11 @@
     document.getElementById("pasteSave").textContent = "Guardar cambios";
     document.getElementById("pasteTitle").value = doc.title;
     document.getElementById("pasteText").value = doc.text;
+    pendingEditorImages = []; editorImageRefs = (doc.inlineImages || []).slice(); document.getElementById("inlineImageInput").value = "";
+    document.getElementById("inlineImageLibrary").hidden = true; document.getElementById("libraryImageSelect").innerHTML = '<option value="">Selecciona una imagen de Folio…</option>'; document.getElementById("insertLibraryImageBtn").disabled = true;
     setTab("paste");
   }
-  function closeModal() { modalVeil.classList.remove("open"); editingDocId = null; }
+  function closeModal() { if (slideSaving) return; clearSlidePhotos(); modalVeil.classList.remove("open"); editingDocId = null; }
   document.getElementById("modalClose").addEventListener("click", closeModal);
   document.querySelectorAll("[data-close]").forEach(function (b) { b.addEventListener("click", closeModal); });
   modalVeil.addEventListener("click", function (e) { if (e.target === modalVeil) closeModal(); });
@@ -3124,22 +3552,82 @@
     document.querySelectorAll(".tab-btn").forEach(function (b) { b.classList.toggle("active", b.dataset.tab === name); });
     document.getElementById("pasteTab").classList.toggle("active", name === "paste");
     document.getElementById("fileTab").classList.toggle("active", name === "file");
+    document.getElementById("slidesTab").classList.toggle("active", name === "slides");
   }
   document.querySelectorAll(".tab-btn").forEach(function (b) { b.addEventListener("click", function () { setTab(b.dataset.tab); }); });
   document.getElementById("pasteSave").addEventListener("click", function () {
     var title = document.getElementById("pasteTitle").value.trim();
     var text = document.getElementById("pasteText").value.trim();
     if (!text) { document.getElementById("pasteText").focus(); return; }
+    var saveWithImages = Promise.resolve();
+    pendingEditorImages.forEach(function (entry) {
+      saveWithImages = saveWithImages.then(function () {
+        var source = entry.blob || entry.file, name = entry.name || (entry.file && entry.file.name) || "imagen", mime = (source && source.type) || "image/png";
+        return source.arrayBuffer().then(function (buf) { return pdfDbPut(entry.key, buf).then(function () { editorImageRefs.push({ key: entry.key, name: name, mimeType: mime }); }); });
+      });
+    });
+    saveWithImages.then(function () {
+    var usedKeys = {}; (text.match(/!\[[^\]]*\]\(folio-image:([^)]+)\)/g) || []).forEach(function (m) { var x = m.match(/folio-image:([^)]+)/); if (x) usedKeys[x[1]] = true; });
+    var refs = editorImageRefs.filter(function (it) { return usedKeys[it.key]; });
     if (editingDocId) {
       var doc = state.docs.find(function (d) { return d.id === editingDocId; });
       if (doc) {
-        doc.title = title || text.slice(0, 40); doc.text = text; doc.lastIndex = 0;
+        doc.title = title || text.slice(0, 40); doc.text = text; doc.inlineImages = refs; doc.lastIndex = 0;
         saveLibrary(); renderSideList();
         if (state.activeId === doc.id) renderReader();
       }
       closeModal(); return;
     }
-    addDocument(title || text.slice(0, 40), text); closeModal();
+    addDocument(title || text.slice(0, 40), text, { inlineImages: refs }); closeModal();
+    });
+  });
+  document.getElementById("insertInlineImageBtn").addEventListener("click", function () { document.getElementById("inlineImageInput").click(); });
+  document.getElementById("inlineImageInput").addEventListener("change", function (e) {
+    var files = Array.prototype.slice.call(e.target.files || []), textarea = document.getElementById("pasteText");
+    files.forEach(function (file) {
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type) || file.size > 10 * 1024 * 1024) { toast("Usa imágenes PNG, JPG, WebP o GIF de hasta 10 MB."); return; }
+      var key = "img_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), marker = "\n![" + file.name.replace(/[\]\n]/g, "") + "](folio-image:" + key + ")\n";
+      var start = textarea.selectionStart, end = textarea.selectionEnd; textarea.setRangeText(marker, start, end, "end"); pendingEditorImages.push({ key: key, file: file, name: file.name });
+    });
+    e.target.value = "";
+  });
+  function getLibraryImages() {
+    var list = [], seen = {};
+    state.docs.forEach(function (doc) {
+      if (doc.attachmentType === "image" && doc.pdfKey && !seen[doc.pdfKey]) {
+        seen[doc.pdfKey] = true; list.push({ key: doc.pdfKey, name: doc.title || "Imagen", mimeType: doc.mimeType || "image/png", label: (doc.title || "Imagen") + " · archivo" });
+      }
+      (doc.inlineImages || []).forEach(function (img) {
+        if (img.key && !seen[img.key]) { seen[img.key] = true; list.push({ key: img.key, name: img.name || "Imagen", mimeType: img.mimeType || "image/png", label: (doc.title || "Documento") + " · " + (img.name || "Imagen") }); }
+      });
+    });
+    return list;
+  }
+  var libraryImagesForEditor = [];
+  document.getElementById("chooseLibraryImageBtn").addEventListener("click", function () {
+    var picker = document.getElementById("inlineImageLibrary"), select = document.getElementById("libraryImageSelect");
+    libraryImagesForEditor = getLibraryImages();
+    select.innerHTML = '<option value="">Selecciona una imagen de Folio…</option>';
+    document.getElementById("insertLibraryImageBtn").disabled = true;
+    libraryImagesForEditor.forEach(function (img) { var option = document.createElement("option"); option.value = img.key; option.textContent = img.label; select.appendChild(option); });
+    if (!libraryImagesForEditor.length) { toast("Todavía no hay imágenes guardadas en Folio."); return; }
+    picker.hidden = !picker.hidden;
+  });
+  document.getElementById("libraryImageSelect").addEventListener("change", function () {
+    document.getElementById("insertLibraryImageBtn").disabled = !this.value;
+  });
+  document.getElementById("insertLibraryImageBtn").addEventListener("click", function () {
+    var select = document.getElementById("libraryImageSelect"), chosen = libraryImagesForEditor.find(function (img) { return img.key === select.value; });
+    if (!chosen) return;
+    var textarea = document.getElementById("pasteText"), start = textarea.selectionStart, end = textarea.selectionEnd;
+    getPdfBytes(chosen.key).then(function (buf) {
+      if (!buf) { toast("No se pudo recuperar esa imagen. Comprueba la conexión y vuelve a intentarlo."); return; }
+      var key = "img_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), marker = "\n![" + chosen.name.replace(/[\]\n]/g, "") + "](folio-image:" + key + ")\n";
+      textarea.setRangeText(marker, start, end, "end");
+      pendingEditorImages.push({ key: key, blob: new Blob([buf], { type: chosen.mimeType }), name: chosen.name });
+      document.getElementById("inlineImageLibrary").hidden = true;
+      toast("Imagen insertada en el texto.");
+    });
   });
 
   /* ---------- AI side panel (resumen / cuestionario / preguntar) ---------- */
@@ -3442,6 +3930,27 @@
     return (key ? Promise.resolve(key) : askGeminiKey()).then(function (k) {
       if (!k) throw { code: "sin_llave" };
       return gemModels(k).then(function (models) { return gemGenerate(models, k, body); });
+    }).catch(function (e) {
+      if (e && e.code === "bad_key") { lsDel("folioGeminiKey"); lsDel("folioGeminiModels"); }
+      throw (e && e.code) ? e : { code: "error" };
+    });
+  }
+  function geminiImageText(file) {
+    var key = getGeminiKey();
+    return (key ? Promise.resolve(key) : askGeminiKey()).then(function (k) {
+      if (!k) throw { code: "sin_llave" };
+      return file.arrayBuffer().then(function (buf) {
+        var bytes = new Uint8Array(buf), bin = "", step = 0x8000;
+        for (var i = 0; i < bytes.length; i += step) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+        var body = { contents: [{ role: "user", parts: [
+          { text: "Transcribe el texto visible en esta imagen para que pueda leerse en voz alta. Conserva el orden de lectura, encabezados, listas y puntuación. No describas la imagen, no agregues explicaciones ni inventes texto. Devuelve únicamente la transcripción; si no hay texto legible, responde exactamente: SIN_TEXTO_LEGIBLE." },
+          { inlineData: { mimeType: file.type || "image/png", data: btoa(bin) } }
+        ] }] };
+        return gemModels(k).then(function (models) { return gemGenerate(models, k, body); });
+      });
+    }).then(function (text) {
+      if (text.trim() === "SIN_TEXTO_LEGIBLE") throw { code: "no_image_text" };
+      return text.trim();
     }).catch(function (e) {
       if (e && e.code === "bad_key") { lsDel("folioGeminiKey"); lsDel("folioGeminiModels"); }
       throw (e && e.code) ? e : { code: "error" };
@@ -4393,12 +4902,27 @@
     setFileStatus("Leyendo la carpeta…");
     importFolderPackage(file).then(function (r) {
       setFileStatus("Listo.", "ok"); closeModal();
-      toast("Carpeta «" + r.nombre + "» importada: " + r.docs + (r.docs === 1 ? " documento" : " documentos") + (r.tareas ? " y " + r.tareas + " elementos de IA" : "") + ".");
+      toast("Carpeta «" + r.nombre + "» importada: " + r.docs + (r.docs === 1 ? " documento" : " documentos") + (r.tareas ? " y " + r.tareas + " elementos de IA" : "") + (r.ocrPendientes ? ". " + r.ocrPendientes + " imágenes quedaron guardadas, pero sin texto reconocido." : "."));
     }).catch(function (e) { setFileStatus((e && e.message) || "No se pudo importar ese archivo.", "error"); });
   }
   function handleFile(file) {
     if (isFolioName(file.name)) { importFolioFile(file); return; }
-    var name = file.name.replace(/\.(txt|pdf)$/i, "");
+    var name = file.name.replace(/\.(txt|pdf|png|jpe?g|webp|gif|zip)$/i, "");
+    if (/\.(png|jpe?g|webp|gif)$/i.test(file.name) || /^image\//i.test(file.type || "")) {
+      setFileStatus("Reconociendo texto de la imagen…");
+      if (file.size > 15 * 1024 * 1024) { setFileStatus("La imagen supera 15 MB. Reduce su tamaño e inténtalo otra vez.", "error"); return; }
+      addImageDocument(name, file, file.type || imageMime(file.name)).then(function () { setFileStatus("Listo.", "ok"); closeModal(); })
+        .catch(function (e) { setFileStatus(e && e.code === "image_consent" ? "Importación cancelada." : (e && e.code === "sin_llave" ? "Para leer imágenes, configura una llave de Gemini en este dispositivo." : (e && e.code === "no_image_text" ? "No encontramos texto legible en esta imagen." : "No se pudo leer el texto de la imagen. Revisa tu conexión y la llave de Gemini.")), "error"); });
+      return;
+    }
+    if (/\.html?$/i.test(file.name) || file.type === "text/html") {
+      file.text().then(function (raw) {
+        var parsed = new DOMParser().parseFromString(raw, "text/html"), text = (parsed.body && parsed.body.innerText) || (parsed.body && parsed.body.textContent) || "";
+        if (!text.trim()) throw new Error("No encontramos texto en el HTML.");
+        addDocument(name, text); setFileStatus("Listo.", "ok"); closeModal();
+      }).catch(function (e) { setFileStatus(e.message || "No se pudo leer el HTML.", "error"); });
+      return;
+    }
     if (/\.txt$/i.test(file.name) || file.type === "text/plain") {
       setFileStatus("Leyendo archivo…");
       var reader = new FileReader();
@@ -4422,8 +4946,11 @@
       return;
     }
     isZipFile(file).then(function (zip) {
-      if (zip) importFolioFile(file);
-      else setFileStatus("Formato no compatible. Usa un archivo .txt, .pdf o .folio (carpeta de Folio).", "error");
+      if (!zip) { setFileStatus("Formato no compatible. Usa TXT, PDF, imágenes, ZIP o una carpeta .folio.", "error"); return; }
+      if (/\.folio$/i.test(file.name)) { importFolioFile(file); return; }
+      setFileStatus("Importando documentos e imágenes del ZIP…");
+      importStudyZip(file).then(function (r) { setFileStatus("Listo.", "ok"); closeModal(); toast("ZIP importado: " + r.docs + " textos y " + r.images + " imágenes."); })
+        .catch(function (e) { setFileStatus((e && e.message) || "No se pudo importar el ZIP.", "error"); });
     });
   }
   /* ---------- PDF: texto con párrafos + visor fiel con capa de texto ---------- */
